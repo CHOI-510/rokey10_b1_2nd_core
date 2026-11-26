@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 if __package__:
     from .audio_device import resolve_input_device
 else:
-    from .audio_device import resolve_input_device
+    from audio_device import resolve_input_device
 
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))

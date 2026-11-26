@@ -4,7 +4,10 @@ from pathlib import Path
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from typing import Literal
+
+from my_fastapi_app.command_parser import parse_transcription
 
 import os
 from datetime import datetime, timezone
@@ -30,14 +33,27 @@ database = mongo_client[os.getenv("MONGODB_DATABASE", "voice_app")]
 transcriptions = database[
     os.getenv("MONGODB_COLLECTION", "transcriptions")
 ]
+command_rules = database[
+    os.getenv("MONGODB_RULES_COLLECTION", "keywords-commands")
+]
 
 app = FastAPI()
 recording_lock = Lock()
 logger = logging.getLogger(__name__)
 
 
+class CommandResult(BaseModel):
+    command: str
+    behave: str | None
+    status: Literal["simulated", "unconfigured"]
+    message: str
+
+
 class TranscriptionResponse(BaseModel):
     text: str
+    keywords: list[str] = Field(default_factory=list)
+    commands: list[CommandResult] = Field(default_factory=list)
+    extraction_error: str | None = None
 
 
 @app.get("/")
@@ -76,7 +92,19 @@ def transcribe():
                 detail="음성은 변환됐지만 DB 저장에 실패했습니다. MongoDB 연결을 확인하세요.",
             ) from None
 
-        return TranscriptionResponse(text=text)
+        try:
+            # Read fresh rules each time, so DB edits apply to the next recording.
+            extracted = parse_transcription(text, command_rules.find(
+                {}, {"_id": 0, "keywords": 1, "commands": 1, "behave": 1}
+            ))
+        except PyMongoError:
+            logger.exception("MongoDB 키워드/명령 조회 실패")
+            return TranscriptionResponse(
+                text=text,
+                extraction_error="음성은 저장됐지만 키워드·명령 조회에 실패했습니다. 다시 녹음해 주세요.",
+            )
+
+        return TranscriptionResponse(text=text, **extracted)
     except HTTPException:
         raise
     except Exception:
