@@ -95,9 +95,9 @@ TaskResult 토픽과 JSONL의 ID·판정, Event JSONL, Episode의 메타데이�
 팀원은 같은 변경본을 받고 기존 오버레이가 source되지 않은 터미널에서 실행합니다.
 
 ```bash
-cd ~/cobot2_ws/src/core_project
+cd ~/cobot2_ws
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log/core-v01 build --base-paths . \
+colcon --log-base log/core-v01 build --base-paths src/core_project \
   --build-base build/core-v01 --install-base install/core-v01 --symlink-install
 source install/core-v01/local_setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
