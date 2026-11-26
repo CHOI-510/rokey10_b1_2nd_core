@@ -1,3 +1,4 @@
+from math import isfinite
 from time import monotonic
 
 from core_common.announcements import FETCH_COMPLETE, HANDOFF_COMPLETE, INSPECTION
@@ -5,6 +6,7 @@ from core_common.errors import ErrorCode as Error
 from core_common.status_qos import current_stamp, time_ns
 from core_common.types import Fastening, Outcome, Presence, Side, State
 from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
+from core_interfaces.msg import TargetPose
 from core_interfaces.srv import Inspect, InspectPositions, Locate, ReadFastening
 
 
@@ -189,3 +191,62 @@ class InspectionTask(AssemblyTask):
             self.control.publish_status()
         if evidence != 'REAL':
             raise TaskEnded(Outcome.HOLD, field + '_evidence_unverified')
+
+
+class RealAssemblyTask(InspectionTask):
+    """Fasten taught L/R positions after live inspection of a prepared fixture."""
+
+    def run(self):
+        self.control.transition(self, State.INSPECT)
+        self.read_presence(State.INSPECT)
+        positions = (self.presence_l, self.presence_r)
+        if Presence.UNKNOWN in positions:
+            raise TaskEnded(Outcome.HOLD, 'position_presence_unknown')
+        if Presence.MISSING in positions:
+            self.control.transition(self, State.WAIT_WORKER)
+            self.control.announce(self, '빠진 볼트를 준비하고 작업 공간을 비운 뒤 WORKER DONE을 눌러 주세요.')
+            self.control.wait_for(self, lambda: self.done, self.control.worker_timeout, 'worker_timeout')
+            self.control.transition(self, State.RECHECK)
+            self.read_presence(State.RECHECK)
+            self.require_both_present()
+
+        self.control.transition(self, State.FASTEN)
+        self.recipe_id = 'finish'
+        for point in ('L', 'R'):
+            self.control.log(self.task_id, State.FASTEN, f'{point}: finish requested')
+            # Real mode uses the taught point ID. The empty pose carries no fake geometry.
+            reply = self.action(Fasten, point_id=point, bolt_pose=TargetPose(), recipe_id=self.recipe_id)
+            self.control.wait_for(self, lambda: self.control.terminal_snapshot(self)
+                                  and self.control.physical_ready(), self.control.limits['robot_heartbeat'],
+                                  'robot_terminal_state_unconfirmed')
+            measured = (reply.success and reply.error_code == Error.OK and reply.tightening_valid
+                        and isfinite(reply.peak_torque) and reply.peak_torque > 0
+                        and isfinite(reply.turns) and reply.turns > 0 and bool(reply.episode_id))
+            seat = Fastening.SEATED if measured and reply.state == Fastening.SEATED else (
+                Fastening.NOT_SEATED if reply.state == Fastening.NOT_SEATED else Fastening.UNKNOWN)
+            with self.control.lock:
+                self.control.guard(self)
+                setattr(self, 'fastening_' + point.lower(), seat)
+                if seat == Fastening.SEATED:
+                    self.fastening_evidence = 'ACTION_TORQUE'
+                self.tightening_valid = seat == Fastening.SEATED
+                self.control.log(self.task_id, State.FASTEN,
+                                 f'{point}: {seat}, episode={reply.episode_id}, probe_valid={measured}')
+                self.control.publish_status()
+            if seat == Fastening.NOT_SEATED:
+                return Outcome.FAIL, f'{point.lower()}_not_seated'
+            if seat != Fastening.SEATED:
+                return Outcome.HOLD, f'{point.lower()}_fastening_unconfirmed'
+
+        self.control.transition(self, State.VERIFY)
+        self.read_presence(State.VERIFY)
+        self.require_both_present()
+        self.fastening = Fastening.SEATED
+        return Outcome.PASS, 'lr_present_after_verified_torque'
+
+    def require_both_present(self):
+        positions = (self.presence_l, self.presence_r)
+        if Presence.UNKNOWN in positions:
+            raise TaskEnded(Outcome.HOLD, 'position_presence_unknown')
+        if Presence.MISSING in positions:
+            raise TaskEnded(Outcome.HOLD, 'position_bolt_missing')

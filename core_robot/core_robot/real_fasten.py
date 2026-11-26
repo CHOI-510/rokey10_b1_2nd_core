@@ -105,6 +105,10 @@ class RealFasten:
             return self._dsr_available()
         return self._mode_client.wait_for_service(timeout_sec=timeout)
 
+    def services_ready(self):
+        return (self._mode_client.service_is_ready()
+                and self.stop_client is not None and self.stop_client.service_is_ready())
+
     def request_stop(self):
         """Non-blocking: called from robot_node.latch_stop while holding its lock."""
         if self.stop_client is None:
@@ -124,6 +128,7 @@ class RealFasten:
         """Run one fastening. Fills result.state/peak_torque/turns/tightening_valid.
         Returns (ErrorCode, reason)."""
         core = self.core
+        self.last_log = ''
         result.state = Fastening.UNKNOWN
         result.tightening_valid = False
         result.peak_torque = result.turns = 0.0
@@ -137,7 +142,6 @@ class RealFasten:
             return Error.UNAVAILABLE, 'dsr_controller_unavailable'
         if self.camera_topic and not self.vision:
             return Error.INVALID, 'ros_camera_requires_fasten_vision'
-        self.last_log = ''
         notify('PREPARE', f'bolt{bolt}: camera / calibration check ({self.camera_topic or "UDP"})')
         try:
             fastener = core.Fastener(self.dr, self.log, bolt, vision=self.vision,
@@ -157,16 +161,20 @@ class RealFasten:
             fastener.check_camera()
             fastener.guard()
             notify('PREPARE', 'move to READY_J')
-            motion = 'ready'
-            core.go_ready(self.dr)
-            outcome = fastener.run()
-            if outcome == core.RESULT_DONE and fastener.torque_samples > 0:
-                error = Error.OK
-                result.state = Fastening.SEATED
-                result.tightening_valid = True
-                reason = outcome
+            try:
+                core.go_ready(self.dr)
+            except Exception as exc:
+                error, reason = Error.STOPPED, f'ready_motion_failed: {exc}'
             else:
-                reason = f'tightening_not_confirmed:{outcome}'
+                motion = 'ready'
+                outcome = fastener.run()
+                if outcome == core.RESULT_DONE and fastener.torque_samples > 0:
+                    error = Error.OK
+                    result.state = Fastening.SEATED
+                    result.tightening_valid = True
+                    reason = outcome
+                else:
+                    reason = f'tightening_not_confirmed:{outcome}'
         except core.Interrupted as exc:
             if exc.kind == 'stopped':
                 error, motion = Error.STOPPED, 'hold'
@@ -183,10 +191,15 @@ class RealFasten:
             reason = f'exception: {exc}'
         finally:
             try:
-                if not fastener.finish(motion) and error == Error.OK:
-                    self.log.warn('fastening done but return to READY_J failed')
+                cleaned = fastener.finish(motion)
+            except Exception as exc:
+                cleaned = False
+                self.log.error(f'fastening cleanup: {exc}')
             finally:
                 result.turns = fastener.total_deg / 360.0
                 result.peak_torque = fastener.max_tau6 if fastener.torque_samples else 0.0
                 self.fastener = None
+            if not cleaned:
+                error, reason = Error.STOPPED, 'fastening_cleanup_failed'
+                result.tightening_valid = False
         return error, reason

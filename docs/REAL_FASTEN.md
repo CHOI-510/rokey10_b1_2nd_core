@@ -109,3 +109,16 @@ python3 tests/fasten_camera_input.py
 - 가상 DSR 객체로 성공 · 미완료 · 토크 미측정 · 취소 · 정지 · 지원하지 않는 목표의 결과를 확인한다.
 - 실물 모드 `robot_node`에 실제 `/fasten` Goal을 보내 거절 경로, 컨트롤러가 없을 때의 `UNAVAILABLE`, 중복 서버 차단을 확인한다.
 - 원본 Image 시험은 가상 Doosan 객체로 실행한다. RGB→BGR, Action 수행 중 콜백, 무수신·오래된 프레임·디코딩 실패 시 모션 0건, 취소·정지 시 구독 해제, 늦게 도착한 이전 프레임 거절, 빈 파라미터의 UDP 선택을 확인한다.
+
+## L/R 실물 통합 사이클
+
+`mode:=real`은 시험용 혼합 모드와 별도의 실행 경로입니다. `system.launch.py`가 Vision 1의 `/integration/inspect_positions`와 `core_robot`의 실물 `/fasten`을 같은 관제에 연결합니다. GUI의 L/R 카드에 존재, 체결 판정과 근거가 표시됩니다.
+
+1. 작업 전에 드라이버를 파지하고 L=볼트 2, R=볼트 1의 티칭값과 TCP를 확인합니다. 이 사이클은 두 위치 모두 마무리 체결이 필요한 작업물을 대상으로 합니다. Vision 1은 볼트의 존재를 구분하며 기존의 체결 여부는 구분하지 못합니다.
+2. Vision 1 보정에는 검사 시작 전과 체결 후 대기 자세에서 볼트 두 위치가 모두 보이는 영상이 필요합니다. 손목 영상으로 검사할 때에는 CHECK 전에 티칭된 대기 자세에 있어야 합니다. 고정 카메라를 별도로 쓰면 `vision_camera_topic`과 그 카메라용 `vision_roi_file`을 지정합니다. 체결용 손목 영상과 십자 홈 보정은 `camera_topic` 및 `fasten_test --calib-vision`을 사용합니다.
+3. Doosan 브링업과 RealSense 후 [README의 실물 Launch](../README.md#lr-실물-체결-사이클)를 실행합니다. 실제 구성의 정지 서비스 이름이 다르면 `dsr_stop_service`로 지정합니다. 관제의 작업용 Action 서버는 하나만 실행하고, 독립 `fasten_test`를 종료한 상태에서 시작합니다.
+4. CHECK → 실물 L/R 존재 검사입니다. 누락 위치가 있으면 WAIT_WORKER에서 준비 후 WORKER DONE으로 다시 검사합니다. 판정 불가, 영상 미수신, 검증되지 않은 검사 응답은 HOLD 처리합니다.
+5. L/R이 모두 존재하면 티칭 위치 ID로 `finish` Action을 순서대로 실행합니다. 각 Action이 성공하고 토크·회전수·Episode ID를 확인해야 다음 위치로 갑니다. 마지막에는 대기 자세에서 신선한 영상으로 존재를 다시 검사합니다. PASS의 근거는 위치별 Action 토크 판정과 작업 후 영상입니다. 별도 체결 깊이 검사 센서는 이 경로에 포함되어 있지 않습니다. 위치별 Episode는 같은 `task_id`와 각 `point_id`로 기록합니다.
+6. GUI STOP은 Doosan 소프트웨어 정지를 요청합니다. 이 경로의 `stop_confirmed`는 물리 정지 확인 신호가 연결될 때까지 표시하지 않으며, STOPPED에서 GUI RESUME으로 동작을 재개하지 않습니다. 첫 현장 시험에서 실제 정지 동작, 공구·카메라 자세, 좌우 티칭값과 힘·토크 판정을 확인합니다.
+
+Jazzy에서 로봇 없이 새 관제 경로를 시험하려면 별도의 로컬 DDS에서 `python3 tests/real_cycle_integration.py`를 실행합니다. 이 시험은 합성 Vision·Fasten 공급자만 사용합니다.

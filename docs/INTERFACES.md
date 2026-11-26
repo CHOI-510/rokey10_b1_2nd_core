@@ -178,3 +178,9 @@ DB 담당자는 `/task_result`를 Reliable / Transient Local / depth 1로 구독
 ```bash
 ros2 topic echo /task_result --qos-durability transient_local
 ```
+
+### L/R 실물 체결 모드
+
+`mode:=real`에서 관제는 `InspectPositions`의 `INSPECT`, `RECHECK`, `VERIFY`를 사용합니다. `VERIFY`는 실물 체결 후 시각보다 새로운 영상으로 L/R 존재를 확인합니다. 실물 `Fasten`은 `point_id=L|R`, `recipe_id=finish`, `bolt_pose.valid=false`를 사용합니다. 로봇 노드는 스테이션 티칭 위치를 사용하며 기본 매핑은 L=2, R=1입니다.
+
+`TaskResult.mode=real`이고 `fastening_evidence=ACTION_TORQUE`이면 위치별 체결 판정은 Fasten Action의 계측 근거를 사용합니다. `episode_id` 및 단일 토크·회전수 필드는 최근 Action의 값입니다. 이전 위치의 Episode도 같은 `task_id`와 각 `point_id`로 추적할 수 있습니다. 이 모드의 `RobotStatus.stop_confirmed`는 물리 확인이 연동될 때까지 false입니다.

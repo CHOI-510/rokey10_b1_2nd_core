@@ -302,11 +302,13 @@ class Fastener:
         if not self.force_active:
             return
         try:
-            self.dr.release_force()
+            release_force = self.dr.release_force()
             time.sleep(0.2)
-            self.dr.release_compliance_ctrl()
         finally:
-            self.force_active = False
+            release_compliance = self.dr.release_compliance_ctrl()
+        if release_force == -1 or release_compliance == -1:
+            raise Abort("force or compliance release failed")
+        self.force_active = False
 
     # ------------------------------------------------------------ 동작 단위
     def move_rel(self, d, ref, vel=VEL_SLOW, acc=ACC_SLOW):
@@ -651,14 +653,14 @@ class Fastener:
         except Exception as e:   # noqa: BLE001
             ok = False
             self.log.error(f"force_off 실패: {e}")
-        if motion in ("ready", "retreat"):
+        if ok and motion in ("ready", "retreat"):
             try:
                 z = self.dr.get_current_posx()[0][2]
                 if z < self.bolt[2] + VIEW_H:
                     self.go_z(self.bolt[2] + VIEW_H)
                 if motion == "ready":
                     self.guard()
-                    self.dr.movej(READY_J, vel=VELJ, acc=ACCJ)
+                    go_ready(self.dr)
             except Exception as e:   # noqa: BLE001
                 ok = False
                 self.log.error(f"복귀 실패: {e}")
@@ -710,4 +712,6 @@ def connect_dsr(node):
 
 
 def go_ready(dr):
-    dr.movej(READY_J, vel=VELJ, acc=ACCJ)
+    result = dr.movej(READY_J, vel=VELJ, acc=ACCJ)
+    if result is not None and result < 0:
+        raise Abort("movej to READY_J failed")

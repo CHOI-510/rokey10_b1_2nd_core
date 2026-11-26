@@ -62,7 +62,7 @@ class Vision1(Node):
             res.error_code = int(code)
             res.reason = reason
             return res
-        if req.stage not in ('INSPECT', 'RECHECK'):
+        if req.stage not in ('INSPECT', 'RECHECK', 'VERIFY'):
             return fail(ErrorCode.INVALID, 'Unsupported stage')
         try:
             config = validate(json.loads(Path(self.param('roi_file')).expanduser().read_text()))

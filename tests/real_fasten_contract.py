@@ -183,6 +183,17 @@ def routine_cases(log_dir):
     check(f'torque unreadable -> not success, peak 0.0 ({reason})',
           error != Error.OK and not r.tightening_valid and r.peak_torque == 0.0)
 
+    class ReturnFailure(SimDR):
+        def movej(self, pos, **kwargs):
+            if pos == core.READY_J and self.turned:
+                return -1
+            return super().movej(pos, **kwargs)
+
+    r = result()
+    error, reason = make(ReturnFailure()).execute(goal(), never, lambda *a: None, r)
+    check('failed return to READY_J -> STOPPED without a verified result',
+          error == Error.STOPPED and reason == 'fastening_cleanup_failed' and not r.tightening_valid)
+
     for kind, code in (('cancelled', Error.CANCELLED), ('stopped', Error.STOPPED)):
         dr = SimDR(seat_deg=1e9, advance=0.0)
         calls = {'n': 0, 'at': None}

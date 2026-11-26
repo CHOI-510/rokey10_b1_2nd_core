@@ -121,3 +121,16 @@ python3 tests/monitor_integration.py
 ## L/R 외부 검사 결과 통합
 
 `ros2 launch core_bringup system.launch.py mode:=inspection gui:=true`로 외부 검사 결과를 받습니다. CHECK로 L/R 존재를 확인하고 WORKER DONE 뒤 재검사합니다. 두 위치가 모두 PRESENT이면 외부 체결 상태 검사 결과를 표시·기록합니다. 이 모드는 외부 결과를 읽으며 Robot Node와 자동 조립 동작은 실행 범위에 포함되지 않습니다. 팀원 서비스 계약, 음성 명령 예시 및 DB 구독은 [L/R 통합 계약](docs/INTERFACES.md#lr-최소-통합-계약)을 참고하세요.
+
+## L/R 실물 체결 사이클
+
+Doosan 브링업과 RealSense를 실행하고, 같은 ROS Domain에서 CORE를 시작합니다.
+
+```bash
+ros2 launch core_bringup system.launch.py mode:=real gui:=true \
+  camera_topic:=/camera/camera/color/image_raw
+```
+
+이 실행은 관제, Vision 1, 실물 `/fasten` 서버, GUI를 함께 띄웁니다. GUI의 `CHECK`가 실물 L/R 존재 검사를 시작합니다. 준비한 볼트가 빠져 있으면 `WORKER DONE`을 기다린 뒤 다시 검사합니다. 실물 체결 L→R이 각각 계측 성공을 반환하고, 작업 후 신선한 영상에서 두 볼트가 확인되면 PASS입니다.
+
+대상은 **미체결 상태로 준비한 볼트 두 개**입니다. 드라이버를 미리 파지하고, 볼트 위치·TCP, Vision 1 ROI, 체결용 비전 보정을 준비합니다. 시작 자세와 카메라·실물 STOP의 확인 항목은 [실물 통합 절차](docs/REAL_FASTEN.md#lr-실물-통합-사이클)를 참고하세요.

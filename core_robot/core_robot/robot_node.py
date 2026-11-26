@@ -20,7 +20,7 @@ from core_common.robot_setup import require_fake
 from core_common.status_qos import current_stamp, time_ns
 from core_common.types import Fastening, State
 from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
-from core_interfaces.msg import ControlStatus, RobotStatus
+from core_interfaces.msg import ControlStatus, RobotStatus, TargetPose
 from core_interfaces.srv import EmergencyStop
 
 from . import fasten, fetch, stow
@@ -32,7 +32,9 @@ class RobotNode(Node):
     def __init__(self, **node_options):
         super().__init__('robot_node', **node_options)
         self.mode = self.declare_parameter('mode', 'fake').value
-        require_fake(self.mode)
+        self.real_cycle = self.mode == 'real'
+        if not self.real_cycle:
+            require_fake(self.mode)
         self.scenario = self.declare_parameter('scenario', 'missing').value
         if self.scenario not in SCENARIOS:
             raise ValueError(f'Unknown scenario {self.scenario}')
@@ -47,7 +49,8 @@ class RobotNode(Node):
         self.fasten_backend = self.declare_parameter('fasten_backend', 'fake').value
         if self.fasten_backend not in ('fake', 'real'):
             raise ValueError(f'fasten_backend must be fake or real, got {self.fasten_backend}')
-        point_map = list(self.declare_parameter('fasten_point_map', ['assembly_bolt:1']).value)
+        default_points = ['L:2', 'R:1'] if self.real_cycle else ['assembly_bolt:1']
+        point_map = list(self.declare_parameter('fasten_point_map', default_points).value)
         fasten_vision = self.declare_parameter('fasten_vision', True).value
         fasten_camera_topic = self.declare_parameter('fasten_camera_topic', '').value
         stop_service = self.declare_parameter(
@@ -56,7 +59,7 @@ class RobotNode(Node):
         if not isfinite(self.heartbeat_timeout) or self.heartbeat_timeout <= 0:
             raise ValueError('control_heartbeat_timeout must be positive')
         self.control_received = 0.0
-        self.control_state = self.control_id = ''
+        self.control_state = self.control_id = self.control_task_id = ''
         self.control_stamp = 0
         self.retired_controls = deque(maxlen=64)
         self.last_completed_goal_id = ''
@@ -67,15 +70,18 @@ class RobotNode(Node):
         self.gate = Lock()
         self.busy = False
         self.stopped = False
-        self.robot = FakeRobot(self.get_clock(), self.motion_permission)
-        self.gripper = FakeGripper()
+        if self.real_cycle and (self.fasten_backend != 'real' or not fasten_vision or not fasten_camera_topic
+                                or not self.require_heartbeat or not stop_service):
+            raise ValueError('mode=real requires live Image, a real Fasten backend, heartbeat and a stop service')
+        self.robot = None if self.real_cycle else FakeRobot(self.get_clock(), self.motion_permission)
+        self.gripper = None if self.real_cycle else FakeGripper()
         self.real_fasten = None
         if self.fasten_backend == 'real':
             from .real_fasten import RealFasten
             self.real_fasten = RealFasten(self, point_map, vision=fasten_vision,
                                           stop_service=stop_service,
                                           camera_topic=fasten_camera_topic)
-        self.current_pose = self.robot.move_to('top')
+        self.current_pose = TargetPose() if self.real_cycle else self.robot.move_to('top')
         if self.real_fasten is not None:
             # Fake keeps its original startup (no graph check): in-process tests recreate nodes and
             # the graph cache briefly still lists the previous /fasten server.
@@ -85,12 +91,13 @@ class RobotNode(Node):
         self.create_subscription(ControlStatus, '/control_status', self.receive_control, 1)
         self.create_timer(0.1, self.watchdog)
         self.create_service(EmergencyStop, '/robot/emergency_stop', self.stop, callback_group=group)
+        actions = ((Fasten, '/fasten'),) if self.real_cycle else (
+            (MoveTo, '/move_to'), (Fetch, '/fetch'), (Stow, '/stow'), (Fasten, '/fasten'))
         self.servers = [
             ActionServer(self, kind, name, lambda handle, kind=kind: self.execute(kind, handle),
                          goal_callback=lambda goal, action=kind: self.accept(action, goal), cancel_callback=lambda _: CancelResponse.ACCEPT,
                          callback_group=group)
-            for kind, name in ((MoveTo, '/move_to'), (Fetch, '/fetch'),
-                               (Stow, '/stow'), (Fasten, '/fasten'))
+            for kind, name in actions
         ]
 
         self.journal = Journal(self.data, self.get_logger().error, capacity=64)
@@ -118,6 +125,11 @@ class RobotNode(Node):
     def motion_permission(self):
         return self.get_parameter('fake_motion_clear').value and not self.stopped
 
+    def motion_ready(self):
+        if self.real_cycle:
+            return not self.stopped and self.real_fasten.services_ready()
+        return self.robot.safe_to_move()
+
     def control_live(self):
         return (monotonic() - self.control_received < self.heartbeat_timeout
                 and self.get_clock().now().nanoseconds - self.control_stamp
@@ -137,6 +149,7 @@ class RobotNode(Node):
                 self.control_id, self.control_stamp = message.control_id, stamp
                 self.control_received = monotonic()
                 self.control_state = message.state
+                self.control_task_id = message.task_id
                 if self.busy and message.state == State.STOPPED:
                     self.latch_stop(message.stop_reason or 'control_reported_stopped')
 
@@ -146,9 +159,10 @@ class RobotNode(Node):
             self.get_logger().error('real /fasten goal rejected: another /fasten server is in the graph')
             return GoalResponse.REJECT
         with self.gate:
-            if (self.busy or not self.robot.safe_to_move()
+            if (self.busy or not self.motion_ready()
                     or (self.require_heartbeat and (not self.control_live()
-                        or self.control_state in (State.STOPPED, State.RECOVER)))):
+                        or self.control_state in (State.STOPPED, State.RECOVER)))
+                    or (self.real_cycle and (not goal.task_id or goal.task_id != self.control_task_id))):
                 return GoalResponse.REJECT
             self.busy = True
             self.current_action = kind.__name__
@@ -162,18 +176,19 @@ class RobotNode(Node):
 
     def publish_status(self):
         with self.gate:
-            width, gripped = self.gripper.status()
+            width, gripped = (0.0, False) if self.real_cycle else self.gripper.status()
             status = RobotStatus(
                 stamp=self.get_clock().now().to_msg(),
                 robot_mode=self.mode if self.real_fasten is None else f'{self.mode}+real_fasten',
-                busy=self.busy, stopped=self.stopped, safe_to_move=self.robot.safe_to_move(),
+                busy=self.busy, stopped=self.stopped, safe_to_move=self.motion_ready(),
                 error_code=self.error, error_message=self.stop_reason if self.stopped else (
                     self.error.name if self.error else ''),
-                gripper_valid=True, gripper_width=width, grip_detected=gripped,
+                gripper_valid=not self.real_cycle, gripper_width=width, grip_detected=gripped,
                 holding_item=self.holding_item, current_action=self.current_action,
-                current_pose=self.current_pose, force_state_known=True,
+                current_pose=self.current_pose, force_state_known=not self.real_cycle,
                 force_control_active=bool(self.real_fasten and self.real_fasten.force_active),
-                compliance_control_active=bool(self.real_fasten and self.real_fasten.force_active), stop_confirmed=self.stopped and not self.busy,
+                compliance_control_active=bool(self.real_fasten and self.real_fasten.force_active),
+                stop_confirmed=not self.real_cycle and self.stopped and not self.busy,
                 stop_reason=self.stop_reason, stop_id=self.stop_id,
                 last_completed_goal_id=self.last_completed_goal_id)
             self.publisher.publish(status)
@@ -184,7 +199,8 @@ class RobotNode(Node):
         if not self.stopped:
             self.stop_reason = reason
             self.error = Error.STOPPED
-            self.robot.request_stop()
+            if self.robot is not None:
+                self.robot.request_stop()
             if self.real_fasten is not None:
                 self.real_fasten.request_stop()
         if not self.stopped or request_id:
@@ -201,6 +217,10 @@ class RobotNode(Node):
                 response.reason = ('robot_stop_latched' if self.stopped
                                    else 'stop_request_already_processed')
             elif request.command == 'resume':
+                if self.real_cycle:
+                    response.error_code = Error.UNAVAILABLE
+                    response.reason = 'hardware_stop_confirmation_unavailable'
+                    return response
                 if (request.source != 'control' or not request.stop_id
                         or request.stop_id != self.stop_id
                         or time_ns(request.expires_at) <= self.get_clock().now().nanoseconds
@@ -272,6 +292,8 @@ class RobotNode(Node):
             self.get_logger().error(f'{kind.__name__}: {exc}')
         finally:
             with self.gate:
+                if self.real_cycle and error == Error.STOPPED and not self.stopped:
+                    self.latch_stop(detail or 'real_fasten_stopped')
                 if self.stopped:
                     error = Error.STOPPED
                     result.stop_reason = self.stop_reason
@@ -293,7 +315,7 @@ class RobotNode(Node):
                          fastening=result.state, peak_torque_nm=result.peak_torque,
                          turns=result.turns, tightening_valid=result.tightening_valid,
                          stop_reason=result.stop_reason, recipe_id=goal.recipe_id,
-                         backend=self.fasten_backend, detail=detail,
+                         backend=self.fasten_backend, detail=detail, point_id=goal.point_id,
                          fasten_log=self.real_fasten.last_log if self.real_fasten else ''))
             self.publish_status()
         result.success = error == Error.OK
@@ -304,8 +326,10 @@ class RobotNode(Node):
         """Real /fasten: blocking routine with cancel/stop checks and periodic feedback.
         Control expects feedback within 3 s and a rising progress within 3 s, so a ticker
         publishes every second and raises progress by one every two seconds (max 98)."""
-        if not (goal.point_id and valid_pose(goal.bolt_pose)):
+        if not goal.point_id or (not self.real_cycle and not valid_pose(goal.bolt_pose)):
             return Error.INVALID, 'invalid_point_or_pose'
+        if self.real_cycle and goal.bolt_pose.valid:
+            return Error.INVALID, 'real_cycle_requires_taught_point'
         started = monotonic()
         stage = {'name': 'FASTEN', 'progress': 0}
         done = Event()
@@ -327,7 +351,7 @@ class RobotNode(Node):
             with self.gate:
                 if self.stopped:
                     return 'stopped'
-                if not self.robot.safe_to_move():
+                if not self.motion_ready():
                     self.latch_stop('motion_clearance_lost')
                     return 'stopped'
                 if handle.is_cancel_requested:

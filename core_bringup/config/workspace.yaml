@@ -5,6 +5,7 @@ control:
     fetch_timeout: 30.0
     stow_timeout: 30.0
     fasten_timeout: 30.0
+    real_fasten_timeout: 180.0
     cancel_timeout: 2.0
     action_settle_timeout: 3.0
     progress_timeout: 3.0

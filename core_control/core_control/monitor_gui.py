@@ -431,10 +431,10 @@ class MonitorWindow:
             prefix = 'MOCK · ' if result.mode == 'fake' else ''
             measurements = f'{prefix}{result.peak_torque:.2f} N·m / {result.turns:.2f}'
         record = control or result
-        inspection_only = self.display_mode == 'INSPECTION'
+        position_mode = self.display_mode in ('INSPECTION', 'REAL')
         inspection_values = [getattr(record, key, '') or 'N/A'
                              for key in ('top', 'side', 'fastening')]
-        if inspection_only:
+        if position_mode:
             inspection_values = [
                 f'{getattr(record, "presence_" + point, "") or "N/A"} / '
                 f'{getattr(record, "fastening_" + point, "") or "N/A"}'
@@ -443,7 +443,7 @@ class MonitorWindow:
             inspection_values.append(
                 f'{getattr(record, "presence_evidence", "") or "UNVERIFIED"} / '
                 f'{getattr(record, "fastening_evidence", "") or "UNVERIFIED"}')
-        captions = (('Left(L) 존재 / 체결', 'Right(R) 존재 / 체결', '판정 근거') if inspection_only
+        captions = (('Left(L) 존재 / 체결', 'Right(R) 존재 / 체결', '판정 근거') if position_mode
                     else ('상단 검사', '측면 검사', '체결 판정'))
         for key, caption, value in zip(('top', 'side', 'fastening'), captions, inspection_values):
             self.captions[key].configure(text=caption)
