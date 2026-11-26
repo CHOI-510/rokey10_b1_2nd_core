@@ -12,17 +12,24 @@ Ubuntu 24.04에서 ROS 2 Jazzy와 Cyclone DDS를 사용합니다. Jazzy apt 저�
 sudo apt install ros-jazzy-ros-base ros-jazzy-rmw-cyclonedds-cpp \
   ros-jazzy-rosidl-default-generators ros-jazzy-sensor-msgs ros-jazzy-geometry-msgs \
   python3-colcon-common-extensions python3-tk python3-pil
-git clone -b develop https://github.com/CHOI-510/rokey10_b1_2nd_core.git
-cd rokey10_b1_2nd_core
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install
+mkdir -p ~/cobot2_ws/src
+git clone -b develop https://github.com/CHOI-510/rokey10_b1_2nd_core.git ~/cobot2_ws/src/core_project
 ```
 
-이미 체크아웃했다면 저장소 루트에서 빌드합니다. Launch, GUI, CLI와 테스트를 실행하는 **각 터미널**에서도 저장소 루트에서 아래 순서로 source합니다.
+이미 체크아웃했다면 clone은 생략합니다. 새 터미널에서 워크스페이스 루트로 이동해 Core 패키지만 빌드합니다.
+
+```bash
+cd ~/cobot2_ws
+source /opt/ros/jazzy/setup.bash
+colcon --log-base log/core-v01 build --base-paths src/core_project \
+  --build-base build/core-v01 --install-base install/core-v01 --symlink-install
+```
+
+Launch, GUI, CLI와 테스트를 실행하는 각 터미널에서 같은 오버레이를 source합니다.
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source install/local_setup.bash
+source ~/cobot2_ws/install/core-v01/local_setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ```
