@@ -2,8 +2,8 @@
 
 | 단계 | 현재 상태와 남은 범위 |
 |---|---|
-| P0-a | 단일 관제 FSM, Fake Robot·Vision, 통신 계약, JSONL·Episode 기록 구현. Fake 통합 시나리오 10개 검증 |
-| P0-b | L/R 검사 전용 모드 및 합성 공급자·GUI·JSONL 검증 완료. 실제 L/R 영상과 힘·순응 검사 공급자 연결 및 현장 확인 필요. 전체 자동 조립에는 두산 M0609·RG2 어댑터, 작업 좌표·툴·카메라 교정, 힘·토크 한계와 정지 회로 검증. D435i 등 실물 카메라와 힘 센서 발행기, YOLO 탐지·판정·영상 연동, 독립 그리퍼 상태 입력 구현 필요 |
+| P0-a | 초기 Fake 조립 FSM, 공통 ROS 계약, JSONL·Episode 기록 구현. 현재 Fake와 실물은 공통 L/R FSM을 사용 |
+| P0-b | 준비된 L/R 볼트에 대한 Vision 1 검사 → Doosan 체결 → 재검사 연결. L/R 외부 결과 수집 모드는 독립 체결 상태 공급자 필요. 현장에서는 로봇 서비스, 작업 좌표·툴·카메라 교정과 실물 정지·복구를 검증 |
 | P0-c | 음성 알림 구독 및 LLM 서비스 계약 자리 구현. Wakeword, STT, 명령 해석·요약용 LLM과 TTS 연동 예정 |
 | P1 | CORE MONITOR의 상태·결과·로그·명령·선택 영상 및 Wrench 패널 구현 및 Fake 검증. Episode 데이터 품질 검증, 선택 rosbag2 수집과 GUI 이력 조회 예정 |
 | P2 이후 | DB·Web UI, Task Queue·Scheduler, 멀티카메라 Fusion, Tracking, 6D Pose, VLM, 분산 GPU 추론, 모방학습·강화학습 |

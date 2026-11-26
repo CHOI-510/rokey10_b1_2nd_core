@@ -183,3 +183,17 @@ M0609·RG2 구동, 실제 정지 회로와 제어기 확인, D435i 캡처·인�
 ## 현재 Fake L/R 통합 시험
 
 `tests/fake_integration.py`는 GUI 없이 동일한 ROS 공급자, L/R 결과와 두 Action Episode를 확인합니다. `tests/monitor_integration.py`는 GUI의 CHECK·WORKER DONE, 위치별 표시·결과·ROS 미리보기를 시험합니다. `tests/stability_integration.py`는 Vision 서비스 또는 Fasten 서버 누락과 Vision 응답 지연을 포함합니다. 위의 초기 P0-a 결과는 단일 볼트 당시 검증 기록입니다.
+
+
+## 통합 시퀀스와 파트별 경계
+
+| 파트 | Fake·실물 L/R 사이클의 계약 |
+|---|---|
+| Bringup | `mode:=fake`는 Fake Vision·Robot과 기본 GUI를 시작합니다. `mode:=real gui:=true`는 Vision 1·실물 Robot·GUI를 시작합니다. 두 모드를 같은 ROS Domain에서 동시에 실행하면 동일한 절대 서비스·Action 이름이 겹칩니다. |
+| Vision 1 | `InspectPositions`에 L/R 존재와 프레임 시각을 반환합니다. 누락이면 WORKER DONE 뒤 새 요청을 받고, 조임 뒤 VERIFY에서도 새 요청을 받습니다. [교정 및 실행](../core_vision/README_VISION1.md) |
+| Robot | 동일 `Fasten` Action에서 L=볼트 2, R=볼트 1을 순차 처리합니다. Goal ID로 종료 상태를 맞춰 확인한 뒤 다음 단계로 진행합니다. [실물 체결 및 의존성](REAL_FASTEN.md) |
+| Control·GUI | CHECK/DONE은 ROS 서비스로 받고, 검사 판정과 Action 결과를 L/R별 상태 및 최종 결과에 반영합니다. [통신 계약](INTERFACES.md) |
+| 음성·DB | 음성은 별도 연동 계약 단계입니다. `/task_result`와 JSONL을 제공하며 DB·외부 LLM은 기본 사이클의 의존성이 아닙니다. |
+| 별도 검사 | `mode:=inspection`은 외부 존재 및 체결 결과를 읽습니다. 실물 사이클의 토크·작업 후 존재 판정과 독립 체결 판독은 증거 방식이 다릅니다. |
+
+현재 흐름은 미체결 볼트가 준비된 L/R 체결 사이클입니다. 초기 설계의 단일 볼트 흐름에 있던 자동 FETCH·STOW, 측면·깊이 판독, 자동 RESUME까지 포함한 현장 검증은 별도입니다.

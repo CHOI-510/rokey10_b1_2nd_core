@@ -308,8 +308,7 @@ class Control(Node):
                     self.stop_pending = self.start_robot_request('stop', self.stop_request_id)
                 else:
                     self.log('', self.state, 'robot_stop_service_unavailable', 'WARN')
-                if self.stop_pending is None:
-                    self.stop_retry_at = monotonic() + self.limits['stop_response']
+                self.stop_retry_at = monotonic() + self.limits['stop_response']
 
     def complete_recovery(self):
         self.resume_ack = None

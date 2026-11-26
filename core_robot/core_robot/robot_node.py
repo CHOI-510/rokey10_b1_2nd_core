@@ -65,14 +65,17 @@ class RobotNode(Node):
         if self.real_cycle:
             point_map = self.declare_parameter('fasten_point_map', ['L:2', 'R:1']).value
             camera_topic = self.declare_parameter('camera_topic', topics.CAMERA_COLOR).value
-            stop_service = self.declare_parameter('dsr_stop_service', topics.DSR_MOVE_STOP).value
+            stop_service = self.declare_parameter('dsr_stop_service', '').value
             duplicate_wait = self.declare_parameter('fasten_server_check_s', 1.0).value
-            if not camera_topic or not self.require_heartbeat or not stop_service:
-                raise ValueError('mode=real requires a ROS Image topic, heartbeat and a stop service')
+            if not camera_topic or not self.require_heartbeat:
+                raise ValueError('mode=real requires a ROS Image topic and heartbeat')
             self.require_single_fasten_server(duplicate_wait)
             from .real_fasten import RealFasten
             self.real_fasten = RealFasten(self, point_map, stop_service=stop_service,
                                           camera_topic=camera_topic)
+            mapped = {self.real_fasten.point_map.get(point) for point in FASTEN_POINTS}
+            if None in mapped or len(mapped) != len(FASTEN_POINTS):
+                raise ValueError('fasten_point_map must give L and R distinct taught bolts')
         self.current_pose = TargetPose() if self.real_cycle else self.robot.move_to('top')
         group = ReentrantCallbackGroup()
         self.publisher = self.create_publisher(RobotStatus, topics.ROBOT_STATUS, 10)
@@ -185,18 +188,20 @@ class RobotNode(Node):
 
     def latch_stop(self, reason, request_id=''):
         if request_id and request_id in self.stop_ids:
+            if self.real_fasten is not None:
+                self.real_fasten.request_stop()
             return
         if not self.stopped:
             self.stop_reason = reason
             self.error = Error.STOPPED
             if self.robot is not None:
                 self.robot.request_stop()
-            if self.real_fasten is not None:
-                self.real_fasten.request_stop()
         if not self.stopped or request_id:
             self.stop_id = request_id or uuid4().hex
             self.stop_ids.append(self.stop_id)
         self.stopped = True
+        if self.real_fasten is not None:
+            self.real_fasten.request_stop()
 
     def stop(self, request, response):
         with self.gate:

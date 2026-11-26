@@ -116,6 +116,15 @@ class Abort(Exception):
     """안전 조건 위반 또는 진행 불가."""
 
 
+class DriverRejected(Abort):
+    """A motion or force command failed at the Doosan API."""
+
+
+def require_driver_success(command, result):
+    if result is not None and result < 0:
+        raise DriverRejected(f'{command} failed ({result})')
+
+
 class Interrupted(Abort):
     """호출한 쪽의 취소(cancelled) 또는 정지(stopped) 요청으로 멈춤."""
 
@@ -196,6 +205,8 @@ class Fastener:
                     # ROI · 축 픽셀 · 자코비안은 픽셀 단위 → 해상도가 다르면 엉뚱한 곳을 가리킨다
                     now = {"view_h": VIEW_H, "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM,
                            "image_size": image_size(first)}
+                    if 'camera_topic' in self.calib:
+                        now['camera_topic'] = self.cam.topic
                     stale = {k: (self.calib.get(k), v) for k, v in now.items() if self.calib.get(k) != v}
                     if "jac_px_per_mm" not in self.calib:
                         stale["jac_px_per_mm"] = ("없음", "중심 맞추기용")
@@ -282,13 +293,15 @@ class Fastener:
             vals = [v for v in vals if not math.isnan(v)]
             self.fz0 = sum(vals) / len(vals) if vals else 0.0
             self.log.info(f"Fz 영점 {self.fz0:+.2f} N")
-            self.dr.task_compliance_ctrl(STX)
+            # Cleanup must try release even if the controller accepted the command
+            # but the client did not receive a successful response.
+            self.force_active = True
+            require_driver_success('task_compliance_ctrl', self.dr.task_compliance_ctrl(STX))
             time.sleep(0.2)
         # DR_FC_MOD_REL: 힘 제어 시작 때 센서값을 기준으로 한 상대 힘 (DRL 매뉴얼 5장 — 정확도 위해 권장)
         # 이미 힘 제어 중에 다시 부를 때(5 N → 12 N)도 기준은 시작 때 값으로 유지된다고 보고 쓴다 — 실기 확인 필요
-        self.dr.set_desired_force([0, 0, fz, 0, 0, 0], dir=[0, 0, 1, 0, 0, 0],
-                                  time=PUSH_RAMP_S, mod=self.dr.DR_FC_MOD_REL)
-        self.force_active = True
+        require_driver_success('set_desired_force', self.dr.set_desired_force(
+            [0, 0, fz, 0, 0, 0], dir=[0, 0, 1, 0, 0, 0], time=PUSH_RAMP_S, mod=self.dr.DR_FC_MOD_REL))
 
     def force_off(self):
         if not self.force_active:
@@ -298,14 +311,15 @@ class Fastener:
             time.sleep(0.2)
         finally:
             release_compliance = self.dr.release_compliance_ctrl()
-        if release_force == -1 or release_compliance == -1:
-            raise Abort("force or compliance release failed")
+        require_driver_success('release_force', release_force)
+        require_driver_success('release_compliance_ctrl', release_compliance)
         self.force_active = False
 
     # ------------------------------------------------------------ 동작 단위
     def move_rel(self, d, ref, vel=VEL_SLOW, acc=ACC_SLOW):
         self.guard()
-        self.dr.movel(list(d), vel=vel, acc=acc, ref=ref, mod=self.dr.DR_MV_MOD_REL)
+        require_driver_success('relative movel', self.dr.movel(
+            list(d), vel=vel, acc=acc, ref=ref, mod=self.dr.DR_MV_MOD_REL))
 
     def go_z(self, z_target, vel=VEL_SLOW, acc=ACC_SLOW):
         """현재 xy · 자세 그대로 base z 만 z_target 으로 (툴 회전을 건드리지 않는다)."""
@@ -317,8 +331,7 @@ class Fastener:
         """툴 Z 축(드라이버 축) 기준 상대 회전. J6 방향을 첫 회전에서 학습한다."""
         self.guard()
         j6_before = self.dr.get_current_posj()[5]
-        self.dr.movel([0, 0, 0, 0, 0, deg], vel=VEL_ROT, acc=ACC_ROT,
-                      ref=self.dr.DR_TOOL, mod=self.dr.DR_MV_MOD_REL)
+        self.move_rel([0, 0, 0, 0, 0, deg], self.dr.DR_TOOL, VEL_ROT, ACC_ROT)
         if count:
             self.total_deg += abs(deg)
         s = self.sample(phase, f"rot={deg:+.1f}")
@@ -426,7 +439,7 @@ class Fastener:
         """힘 제어로 누르며 내려가 접촉 높이를 돌려준다 (힘이 일정 시간 유지되는지로만 판정)."""
         if self.sim:
             self.guard()
-            self.dr.movel(self.bolt, vel=VEL_SLOW, acc=ACC_SLOW)
+            require_driver_success('contact movel', self.dr.movel(self.bolt, vel=VEL_SLOW, acc=ACC_SLOW))
             return self.sample("contact", "sim")["z"]
         hold = 0
         zs = []
@@ -501,7 +514,8 @@ class Fastener:
         back = -d_t * SLOT_SYM_DEG * n
         self.log.info(f"되감기: J6 {j6:.1f} → {j6 + back:.1f} ({SLOT_SYM_DEG * n:.0f}°)")
         self.guard()
-        self.dr.movej([0, 0, 0, 0, 0, back], vel=VELJ, acc=ACCJ, mod=self.dr.DR_MV_MOD_REL)
+        require_driver_success('rewind movej', self.dr.movej(
+            [0, 0, 0, 0, 0, back], vel=VELJ, acc=ACCJ, mod=self.dr.DR_MV_MOD_REL))
         self.sample("rewind")
 
     # ------------------------------------------------------------ 전체
@@ -510,7 +524,7 @@ class Fastener:
         view[2] += VIEW_H
         self.log.info(f"볼트{self.bolt_id} 드라이버 TCP 자세: {[round(v, 2) for v in self.bolt]}")
         self.guard()
-        self.dr.movel(view, vel=VEL_FAST, acc=ACC_FAST)
+        require_driver_success('view movel', self.dr.movel(view, vel=VEL_FAST, acc=ACC_FAST))
         self.sample("view")
 
     def run(self):
@@ -623,7 +637,7 @@ class Fastener:
                 "jac_px_per_mm": np.round(J, 4).tolist(),
                 "test_change_deg": round(change, 2), "view_h": VIEW_H,
                 "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM, "bolt": self.bolt_id,
-                "image_size": image_size(frames[-1]),
+                "image_size": image_size(frames[-1]), "camera_topic": self.cam.topic,
                 "date": datetime.now().isoformat(timespec="seconds")}
         self.sv.save_calib(data)
         self.log.info(f"비전 보정 저장: {self.sv.CALIB_PATH} → {data}")
@@ -676,13 +690,13 @@ def setup_tool(dr, log):
     if TOOL_WEIGHT_NAME:
         if dr.set_tool(TOOL_WEIGHT_NAME) != 0:
             log.warn(f"set_tool('{TOOL_WEIGHT_NAME}') 실패 — 컨트롤러에 등록된 툴 무게 이름 확인 (힘 값이 틀어질 수 있음)")
-    dr.set_robot_mode(dr.ROBOT_MODE_MANUAL)
+    require_driver_success('set manual mode', dr.set_robot_mode(dr.ROBOT_MODE_MANUAL))
     time.sleep(0.5)
     dr.add_tcp(DRIVER_TCP_NAME, [0, 0, DRIVER_TCP_MM, 0, 0, 0])   # 이미 있으면 실패해도 무시
     time.sleep(0.5)
     ok = dr.set_tcp(DRIVER_TCP_NAME)
     time.sleep(0.5)
-    dr.set_robot_mode(dr.ROBOT_MODE_AUTONOMOUS)
+    require_driver_success('set autonomous mode', dr.set_robot_mode(dr.ROBOT_MODE_AUTONOMOUS))
     time.sleep(0.5)
     if ok != 0:
         raise Abort(f"set_tcp('{DRIVER_TCP_NAME}') 실패")
@@ -702,6 +716,4 @@ def connect_dsr(node):
 
 
 def go_ready(dr):
-    result = dr.movej(READY_J, vel=VELJ, acc=ACCJ)
-    if result is not None and result < 0:
-        raise Abort("movej to READY_J failed")
+    require_driver_success('READY_J movej', dr.movej(READY_J, vel=VELJ, acc=ACCJ))

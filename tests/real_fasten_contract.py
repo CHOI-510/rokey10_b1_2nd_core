@@ -15,6 +15,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from core_common.errors import ErrorCode as Error
 from core_common.types import Fastening
@@ -194,6 +195,22 @@ def routine_cases(log_dir):
     check('failed return to READY_J -> STOPPED without a verified result',
           error == Error.STOPPED and reason == 'fastening_cleanup_failed' and not r.tightening_valid)
 
+    class RejectedForce(SimDR):
+        def set_desired_force(self, *args, **kwargs):
+            return -1
+
+    class RejectedMotion(SimDR):
+        def movel(self, *args, **kwargs):
+            return -1
+
+    for rejected, command in ((RejectedForce, 'set_desired_force'), (RejectedMotion, 'view movel')):
+        dr = rejected()
+        r = result()
+        error, reason = make(dr).execute(goal(), never, lambda *a: None, r)
+        check(f'rejected {command} stops instead of continuing cycle',
+              error == Error.STOPPED and command in reason and not r.tightening_valid
+              and [m[0] for m in dr.motions].count('movej') == 1 and not dr.force)
+
     for kind, code in (('cancelled', Error.CANCELLED), ('stopped', Error.STOPPED)):
         dr = SimDR(seat_deg=1e9, advance=0.0)
         calls = {'n': 0, 'at': None}
@@ -217,6 +234,36 @@ def routine_cases(log_dir):
         check(f'{kind} mid-run -> {code.name}, {"no motion" if kind == "stopped" else "vertical retreat only"} '
               f'after request ({len(after)} motions)',
               error == code and ok and not r.tightening_valid and r.state == Fastening.UNKNOWN)
+
+
+def stop_transport_cases():
+    from concurrent.futures import Future
+
+    backend = make(SimDR())
+    sent = []
+
+    def send(request):
+        future = Future()
+        sent.append((request, future))
+        return future
+
+    backend._move_stop = SimpleNamespace(Request=SimpleNamespace)
+    backend.stop_client = SimpleNamespace(service_is_ready=lambda: True, call_async=send,
+                                          remove_pending_request=lambda _: None)
+    with patch('core_robot.real_fasten.monotonic', return_value=0) as clock:
+        backend.request_stop()
+        backend.request_stop()
+        check('only one MoveStop in flight before response deadline', len(sent) == 1)
+        clock.return_value = 2
+        backend.request_stop()
+        check('MoveStop timeout sends a new request', len(sent) == 2 and sent[0][1].cancelled())
+        sent[1][1].set_result(SimpleNamespace(success=False))
+        backend.request_stop()
+        check('negative controller response sends a new request', len(sent) == 3)
+        sent[2][1].set_result(SimpleNamespace(success=True))
+        backend.request_stop()
+        backend.request_stop()
+        check('MoveStop acknowledgement coalesces further sends', backend.stop_acknowledged and len(sent) == 3)
 
 
 # ----------------------------------------------------------------- B. ROS Action (subprocess)
@@ -356,4 +403,5 @@ rclpy.shutdown()
 if __name__ == '__main__':
     with TemporaryDirectory(prefix='core-real-fasten-') as tmp:
         routine_cases(tmp)
+        stop_transport_cases()
         action_cases(tmp)

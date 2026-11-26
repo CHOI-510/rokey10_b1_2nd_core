@@ -27,5 +27,5 @@ FASTEN = '/fasten'
 
 # Existing Doosan names
 DSR_ROBOT_ID = 'dsr01'
-DSR_SET_ROBOT_MODE = f'/{DSR_ROBOT_ID}/dsr_controller2/system/set_robot_mode'
-DSR_MOVE_STOP = f'/{DSR_ROBOT_ID}/dsr_controller2/motion/move_stop'
+DSR_SET_ROBOT_MODE = 'system/set_robot_mode'
+DSR_MOVE_STOP = 'motion/move_stop'

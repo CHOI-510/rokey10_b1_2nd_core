@@ -11,9 +11,9 @@ Goal mapping (checked before any motion)
                           it is never replaced by 'finish')
              other     -> INVALID
   point_id   looked up in ``fasten_point_map`` ("point_id:bolt_number"), default
-             'assembly_bolt:1'. The bolt number selects a taught pose in
+             'L:2' and 'R:1'. The bolt number selects a taught pose in
              core_robot.fastening.fasten_core.BOLT_POSES_TAUGHT. Unknown ids -> INVALID.
-  bolt_pose  must be a valid TargetPose (same check as Fake). It is NOT used for motion:
+  bolt_pose  valid=False selects the station's taught point.
              the real routine moves to the taught pose and corrects x/y with the wrist camera.
 
 Result mapping
@@ -27,13 +27,14 @@ Result mapping
   peak_torque = max |tau6 - tau6 just before tightening| in N·m (0.0 when never measured)
   turns       = counted tool rotation / 360 (seat search + tightening)
 """
+from time import monotonic
+
 from core_common import topics
 from core_common.errors import ErrorCode as Error
 from core_common.types import Fastening
 
 SUPPORTED_RECIPES = {'finish'}
 UNSUPPORTED_RECIPES = {'confirm': 'recipe_confirm_not_implemented_on_real_robot'}
-DEFAULT_POINT_MAP = ['assembly_bolt:1']
 QUICK_STOP = 1     # dsr_msgs2/srv/MoveStop stop_mode DR_QSTOP (Stop Category 2)
 
 
@@ -68,6 +69,9 @@ class RealFasten:
         self.fastener = None
         self.last_log = ''
         self.stop_client = None
+        self.stop_future = None
+        self.stop_deadline = 0.0
+        self.stop_acknowledged = False
         self._dsr_available = dsr_available
         if dr is None:
             import rclpy
@@ -76,10 +80,12 @@ class RealFasten:
             # DSR_ROBOT2 spins this node itself on every call, so it must stay out of the executor.
             self.dsr_node = rclpy.create_node('core_robot_dsr', namespace=core.ROBOT_ID)
             self.dr = core.connect_dsr(self.dsr_node)
-            self._mode_client = self.dsr_node.create_client(
-                SetRobotMode, topics.DSR_SET_ROBOT_MODE)
-            if stop_service:
-                self.stop_client = node.create_client(MoveStop, stop_service)
+            prefix = getattr(self.dr, '_srv_name_prefix', '')
+            mode_service = self.dsr_node.resolve_service_name(prefix + topics.DSR_SET_ROBOT_MODE)
+            stop_service = stop_service or self.dsr_node.resolve_service_name(prefix + topics.DSR_MOVE_STOP)
+            self._mode_client = self.dsr_node.create_client(SetRobotMode, mode_service)
+            self.stop_client = node.create_client(MoveStop, stop_service)
+            self.log.info(f'Doosan readiness service: {mode_service}')
         else:
             self.dsr_node = None
             self.dr = dr
@@ -111,15 +117,38 @@ class RealFasten:
                 and self.stop_client is not None and self.stop_client.service_is_ready())
 
     def request_stop(self):
-        """Non-blocking: called from robot_node.latch_stop while holding its lock."""
-        if self.stop_client is None:
-            self.log.warn('real fasten stop: no Doosan move_stop client; relying on routine guard')
+        """Send a bounded, repeatable controller request under the RobotNode gate."""
+        if self.stop_client is None or self.stop_acknowledged:
             return
-        if not self.stop_client.service_is_ready():
-            self.log.error('real fasten stop: Doosan move_stop service unavailable')
-            return
-        self.stop_client.call_async(self._move_stop.Request(stop_mode=QUICK_STOP))
-        self.log.warn('real fasten stop: Doosan move_stop (DR_QSTOP) requested')
+        try:
+            if self.stop_future is not None:
+                pending = self.stop_future
+                if not pending.done() and monotonic() < self.stop_deadline:
+                    return
+                self.stop_future = None
+                if pending.done() and not pending.cancelled():
+                    try:
+                        acknowledged = pending.result().success
+                    except Exception as exc:
+                        self.log.error(f'Doosan MoveStop reply failed: {exc}')
+                    else:
+                        if acknowledged:
+                            self.stop_acknowledged = True
+                            self.log.info('Doosan accepted MoveStop; physical stop remains unconfirmed')
+                            return
+                        self.log.error('Doosan rejected MoveStop')
+                elif not pending.done():
+                    self.stop_client.remove_pending_request(pending)
+                    pending.cancel()
+                    self.log.error('Doosan MoveStop response timed out')
+            if not self.stop_client.service_is_ready():
+                self.log.error('Doosan MoveStop service unavailable')
+                return
+            self.stop_future = self.stop_client.call_async(self._move_stop.Request(stop_mode=QUICK_STOP))
+            self.stop_deadline = monotonic() + 1.0
+            self.log.warn('Doosan MoveStop requested')
+        except Exception as exc:
+            self.log.error(f'Doosan MoveStop request failed: {exc}')
 
     def ros_camera(self, check_abort):
         from .fastening.ros_image_camera import RosImageCamera
@@ -184,12 +213,14 @@ class RealFasten:
                 if motion != 'hold':
                     motion = 'retreat'
             reason = exc.kind
+        except core.DriverRejected as exc:
+            error, motion, reason = Error.STOPPED, 'hold', str(exc)
         except core.Abort as exc:
             if motion == 'hold':
                 error = Error.UNAVAILABLE
             reason = f'aborted: {exc}'
-        except Exception as exc:     # DSR service failure, etc.
-            reason = f'exception: {exc}'
+        except Exception as exc:
+            error, motion, reason = Error.STOPPED, 'hold', f'exception: {exc}'
         finally:
             try:
                 cleaned = fastener.finish(motion)

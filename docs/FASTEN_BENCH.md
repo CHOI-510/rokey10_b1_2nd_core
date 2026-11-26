@@ -57,7 +57,7 @@ ros2 run core_robot fasten_test --bolt 1 --skip-grip
 - `TOOL_WEIGHT_NAME` — 컨트롤러에 등록된 툴 무게 이름 (지금 `Tool Weight_1` 은 실패 → Fz 영점 빼기로 우회)
 - `[튜닝]` 표시: 누르는 힘, 완료 토크, 중심·각도 허용치 등
 
-비전 보정 파일 `~/cobot2_ws/logs/vision_calib.json` 은 드라이버를 쥔 각도에 따라 달라지므로 공유하지 않는다.
+체결 비전 보정 파일 `~/cobot2_ws/logs/vision_calib.json`은 체결용 카메라·해상도·드라이버를 쥔 각도에 맞춥니다. L/R 존재 검사 ROI는 [Vision 1 절차](../core_vision/README_VISION1.md)에서 따로 저장합니다.
 
 ## 로그
 

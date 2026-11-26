@@ -90,7 +90,7 @@ CSV의 열은 `core_robot/episode_recorder.py`의 `COLUMNS`에 정의되어 있�
 
 GUI는 `/control_status`에서 판정과 허용 명령을 읽습니다. STOP은 `/emergency_stop`과 `/robot/emergency_stop`을 독립 호출합니다. `/control_status`와 `/task_result`는 Reliable, Transient Local, Keep Last 1이며 GUI 구독에도 같은 QoS를 적용합니다. Robot의 Heartbeat 구독은 호환 가능한 Volatile로 새 발행만 받습니다. 새 구독자는 살아 있는 발행기의 마지막 작업 결과를 받습니다. 재시작 이후의 이력은 JSONL을 사용합니다. 진행 중이면 `task_id`와 같은 결과만 표시하고 유휴 시에는 `last_task_id`로 연결합니다. `tightening_valid`가 참일 때만 최종 토크와 회전수를 표시합니다. 실시간 Wrench 그래프는 관측값입니다.
 
-Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용합니다. 기본 1초 동안 갱신이 없으면 NO SIGNAL로 표시하며 작업 버튼을 비활성화합니다. Robot STOP은 계속 요청할 수 있습니다. 요청 경로 미발견은 `service_unavailable`, GUI 응답 기한 5초 초과는 `response_timeout`으로 기록합니다. Vision의 초기 UNVERIFIED와 UNAVAILABLE은 서비스 발견 여부를 반영하고, FAKE OK·NOT_IMPLEMENTED·ERROR·TIMEOUT은 실제 호출 결과를 반영합니다.
+Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용합니다. 기본 1초 동안 갱신이 없으면 NO SIGNAL로 표시하며 작업 버튼을 비활성화합니다. Robot STOP은 계속 요청할 수 있습니다. 요청 경로 미발견은 `service_unavailable`, GUI 응답 기한 5초 초과는 `response_timeout`으로 기록합니다. Vision의 UNAVAILABLE과 SERVICE READY는 서비스 발견 상태를 나타냅니다. WAITING REPLY는 응답 대기, FAKE OK·REAL OK는 증거를 수락한 상태, TIMEOUT은 응답 기한 초과입니다.
 
 ### 선택 센서 입력
 
