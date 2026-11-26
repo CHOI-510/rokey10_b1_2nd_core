@@ -7,7 +7,7 @@ Doosan 브링업의 오버레이를 Core 오버레이보다 먼저 source합니�
 ```bash
 source /opt/ros/jazzy/setup.bash
 source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
-source ~/cobot2_ws/install/core-v01/local_setup.bash
+source ~/cobot2_ws/install/setup.bash
 
 ros2 launch core_bringup system.launch.py mode:=real gui:=true
 ```

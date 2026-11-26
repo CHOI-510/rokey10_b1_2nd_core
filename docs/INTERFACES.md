@@ -129,9 +129,9 @@ Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용�
 ```bash
 cd ~/cobot2_ws
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log/core-v01 build --base-paths src/core_project \
-  --build-base build/core-v01 --install-base install/core-v01 --symlink-install
-source install/core-v01/local_setup.bash
+source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
+colcon build --symlink-install
+source install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 

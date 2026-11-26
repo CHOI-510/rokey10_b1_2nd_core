@@ -98,9 +98,9 @@ TaskResult 토픽과 JSONL의 ID·판정, Event JSONL, Episode의 메타데이�
 ```bash
 cd ~/cobot2_ws
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log/core-v01 build --base-paths src/core_project \
-  --build-base build/core-v01 --install-base install/core-v01 --symlink-install
-source install/core-v01/local_setup.bash
+source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
+colcon build --symlink-install
+source install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ```

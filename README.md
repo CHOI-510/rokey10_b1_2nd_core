@@ -30,20 +30,21 @@ mkdir -p ~/cobot2_ws/src
 git clone -b main https://github.com/CHOI-510/rokey10_b1_2nd_core.git ~/cobot2_ws/src/core_project
 ```
 
-이미 체크아웃했다면 clone은 생략합니다. 새 터미널에서 워크스페이스 루트로 이동해 Core 패키지만 빌드합니다.
+이미 체크아웃했다면 clone은 생략합니다. 새 터미널에서 워크스페이스 루트로 이동해 빌드합니다. Doosan 오버레이를 먼저 source하면 `src/cobot2`의 그리퍼 패키지(`robot_control`)도 함께 빌드됩니다.
 
 ```bash
 cd ~/cobot2_ws
 source /opt/ros/jazzy/setup.bash
-colcon --log-base log/core-v01 build --base-paths src/core_project \
-  --build-base build/core-v01 --install-base install/core-v01 --symlink-install
+source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
+colcon build --symlink-install
 ```
 
 Launch, GUI, CLI와 테스트를 실행하는 각 터미널에서 같은 오버레이를 source합니다.
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ~/cobot2_ws/install/core-v01/local_setup.bash
+source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
+source ~/cobot2_ws/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ```
