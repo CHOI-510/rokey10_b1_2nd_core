@@ -438,12 +438,12 @@ class MonitorWindow:
             inspection_values = [
                 f'{getattr(record, "presence_" + point, "") or "N/A"} / '
                 f'{getattr(record, "fastening_" + point, "") or "N/A"}'
-                for point in ('l', 'f')
+                for point in ('l', 'r')
             ]
             inspection_values.append(
                 f'{getattr(record, "presence_evidence", "") or "UNVERIFIED"} / '
                 f'{getattr(record, "fastening_evidence", "") or "UNVERIFIED"}')
-        captions = (('L 존재 / 체결', 'F 존재 / 체결', '판정 근거') if inspection_only
+        captions = (('Left(L) 존재 / 체결', 'Right(R) 존재 / 체결', '판정 근거') if inspection_only
                     else ('상단 검사', '측면 검사', '체결 판정'))
         for key, caption, value in zip(('top', 'side', 'fastening'), captions, inspection_values):
             self.captions[key].configure(text=caption)

@@ -8,7 +8,7 @@ from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
 from core_interfaces.srv import Inspect, InspectPositions, Locate, ReadFastening
 
 
-POSITION_FIELDS = ('presence_l', 'presence_f', 'fastening_l', 'fastening_f',
+POSITION_FIELDS = ('presence_l', 'presence_r', 'fastening_l', 'fastening_r',
                    'presence_evidence', 'fastening_evidence')
 
 
@@ -40,8 +40,8 @@ class AssemblyTask:
         self.side = Side.UNKNOWN
         self.episode_id = ''
         self.last_goal_id = ''
-        self.presence_l = self.presence_f = ''
-        self.fastening_l = self.fastening_f = ''
+        self.presence_l = self.presence_r = ''
+        self.fastening_l = self.fastening_r = ''
         self.presence_evidence = self.fastening_evidence = ''
 
     def run(self):
@@ -126,22 +126,22 @@ class InspectionTask(AssemblyTask):
 
     def __init__(self, control, task_id, source):
         super().__init__(control, task_id, source)
-        self.presence_l = self.presence_f = Presence.UNKNOWN
-        self.fastening_l = self.fastening_f = Fastening.UNKNOWN
+        self.presence_l = self.presence_r = Presence.UNKNOWN
+        self.fastening_l = self.fastening_r = Fastening.UNKNOWN
         self.presence_evidence = self.fastening_evidence = 'UNVERIFIED'
 
     def run(self):
         self.control.transition(self, State.INSPECT)
         self.read_presence(State.INSPECT)
-        if Presence.UNKNOWN in (self.presence_l, self.presence_f):
+        if Presence.UNKNOWN in (self.presence_l, self.presence_r):
             raise TaskEnded(Outcome.HOLD, 'position_presence_unknown')
         self.control.transition(self, State.WAIT_WORKER)
-        self.control.announce(self, 'L/F 위치를 준비한 뒤 작업자 완료를 알려 주세요.')
+        self.control.announce(self, 'L/R 위치를 준비한 뒤 작업자 완료를 알려 주세요.')
         self.control.wait_for(self, lambda: self.done, self.control.worker_timeout,
                               'worker_timeout')
         self.control.transition(self, State.RECHECK)
         self.read_presence(State.RECHECK)
-        presence = (self.presence_l, self.presence_f)
+        presence = (self.presence_l, self.presence_r)
         if presence != (Presence.PRESENT, Presence.PRESENT):
             reason = ('position_presence_unknown' if Presence.UNKNOWN in presence
                       else 'position_bolt_missing')
@@ -149,7 +149,7 @@ class InspectionTask(AssemblyTask):
 
         self.control.transition(self, State.VERIFY)
         self.read_evidence(ReadFastening, 'fastening', Fastening)
-        states = (self.fastening_l, self.fastening_f)
+        states = (self.fastening_l, self.fastening_r)
         if Fastening.NOT_SEATED in states:
             return Outcome.FAIL, 'position_not_seated'
         if Fastening.UNKNOWN in states:
@@ -163,16 +163,16 @@ class InspectionTask(AssemblyTask):
         with self.control.lock:
             self.control.guard(self)
             setattr(self, field + '_l', enum.UNKNOWN)
-            setattr(self, field + '_f', enum.UNKNOWN)
+            setattr(self, field + '_r', enum.UNKNOWN)
             setattr(self, field + '_evidence', 'UNVERIFIED')
             self.control.publish_status()
         request = kind.Request(task_id=self.task_id, not_before=self.control.stamp(), **fields)
         result = self.control.service(self, kind, request)
         fresh = (time_ns(result.stamp) >= time_ns(request.not_before)
                  and current_stamp(self.control, result.stamp, self.control.evidence_max_age))
-        left, front = (getattr(result, field + suffix) for suffix in ('_l', '_f'))
+        left, right = (getattr(result, field + suffix) for suffix in ('_l', '_r'))
         valid = result.success and result.error_code == Error.OK and fresh
-        left_valid, front_valid = (value in enum._value2member_map_ for value in (left, front))
+        left_valid, right_valid = (value in enum._value2member_map_ for value in (left, right))
         evidence = 'UNVERIFIED'
         if valid and result.origin == 'FAKE':
             evidence = 'FAKE'
@@ -181,7 +181,7 @@ class InspectionTask(AssemblyTask):
         with self.control.lock:
             self.control.guard(self)
             setattr(self, field + '_l', enum(left) if valid and left_valid else enum.UNKNOWN)
-            setattr(self, field + '_f', enum(front) if valid and front_valid else enum.UNKNOWN)
+            setattr(self, field + '_r', enum(right) if valid and right_valid else enum.UNKNOWN)
             setattr(self, field + '_evidence', evidence)
             self.control.log(self.task_id, self.control.state,
                              f'{field}: evidence={evidence}, code={result.error_code}, '

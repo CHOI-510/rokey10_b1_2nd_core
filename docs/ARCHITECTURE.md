@@ -8,7 +8,7 @@
 | core_robot | 로봇 Action 공통 실행 슬롯, Fake 알고리즘, Episode 기록 |
 | core_vision | Fake 상단·측면 검사와 물품 위치 서비스, 실물 템플릿 |
 | core_language | 음성·LLM 연동 자리와 계약 |
-| core_bringup | Fake 조립 및 L/F 외부 검사 Launch, 선택 GUI·음성·LLM 노드와 설정 |
+| core_bringup | Fake 조립 및 L/R 외부 검사 Launch, 선택 GUI·음성·LLM 노드와 설정 |
 
 ## Fake 조립의 노드와 데이터 흐름
 
@@ -50,8 +50,8 @@ flowchart LR
 관제와 Robot은 각각 제한된 비동기 기록 큐를 사용합니다. 영상 Preview의 수신·디코딩은 GUI 프로세스에 있으며 GUI 종료와 Preview 장애는 FSM에 영향을 주지 않습니다. [영상 파이프라인](VIDEO_PIPELINE.md)
 
 
-## L/F 외부 검사 흐름
+## L/R 외부 검사 흐름
 
-`mode:=inspection`에서 같은 관제 FSM과 GUI 명령을 사용합니다. 관제는 외부 `/integration/inspect_positions`로 최초 검사와 재검사를 수행하고, 작업자 DONE 이후 L/F 모두 PRESENT이면 `/integration/read_fastening`으로 검사 결과를 읽습니다. 상태와 결과는 `/control_status`, `/task_result`와 JSONL에 전달됩니다. DB는 결과 토픽을 독립 구독합니다.
+`mode:=inspection`에서 같은 관제 FSM과 GUI 명령을 사용합니다. 관제는 외부 `/integration/inspect_positions`로 최초 검사와 재검사를 수행하고, 작업자 DONE 이후 L/R 모두 PRESENT이면 `/integration/read_fastening`으로 검사 결과를 읽습니다. 상태와 결과는 `/control_status`, `/task_result`와 JSONL에 전달됩니다. DB는 결과 토픽을 독립 구독합니다.
 
-`READY → INSPECT → WAIT_WORKER → RECHECK → VERIFY → REPORT` 경로에서 Robot Node와 Fake Vision은 기동하지 않습니다. VERIFY는 별도 절차에서 획득한 체결 상태의 조회 단계입니다. [L/F 통신 계약](INTERFACES.md#lf-최소-통합-계약)
+`READY → INSPECT → WAIT_WORKER → RECHECK → VERIFY → REPORT` 경로에서 Robot Node와 Fake Vision은 기동하지 않습니다. VERIFY는 별도 절차에서 획득한 체결 상태의 조회 단계입니다. [L/R 통신 계약](INTERFACES.md#lr-최소-통합-계약)

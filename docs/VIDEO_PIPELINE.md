@@ -1,6 +1,6 @@
 # 영상 공유와 CORE MONITOR
 
-`mode:=inspection`에서도 CORE MONITOR의 Preview는 선택 입력입니다. L/F 판정은 외부 검사 서비스에서 수신합니다. [L/F 통신 계약](INTERFACES.md#lf-최소-통합-계약)
+`mode:=inspection`에서도 CORE MONITOR의 Preview는 선택 입력입니다. L/R 판정은 외부 검사 서비스에서 수신합니다. [L/R 통신 계약](INTERFACES.md#lr-최소-통합-계약)
 
 ## 확인한 구성
 

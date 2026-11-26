@@ -14,20 +14,20 @@ from fake_integration import Probe, read_jsonl
 
 
 def exercise(probe, data, window=None, wait=None):
-    presence = {'INSPECT': ('MISSING', 'PRESENT'), 'RECHECK': ('PRESENT', 'PRESENT')}
+    presence = {'INSPECT': ('PRESENT', 'MISSING'), 'RECHECK': ('PRESENT', 'PRESENT')}
     fastening = ('SEATED', 'NOT_SEATED')
     origin = 'REAL'  # Exercises the admitted contract branch with synthetic data in this test only.
     force_calls = []
 
     def inspect(request, response):
-        response.presence_l, response.presence_f = presence[request.stage]
+        response.presence_l, response.presence_r = presence[request.stage]
         response.success, response.verified, response.origin = True, True, origin
         response.stamp = probe.get_clock().now().to_msg()
         return response
 
     def read_fastening(request, response):
         force_calls.append(request.task_id)
-        response.fastening_l, response.fastening_f = fastening
+        response.fastening_l, response.fastening_r = fastening
         response.success, response.verified, response.origin = True, True, origin
         response.stamp = probe.get_clock().now().to_msg()
         return response
@@ -41,19 +41,21 @@ def exercise(probe, data, window=None, wait=None):
 
     job = probe.command('check', source='voice')
     probe.wait(lambda: probe.status == 'WAIT_WORKER', 'manual preparation')
-    assert (probe.snapshot.presence_l, probe.snapshot.presence_f) == ('MISSING', 'PRESENT')
+    assert (probe.snapshot.presence_l, probe.snapshot.presence_r) == ('PRESENT', 'MISSING')
     assert not force_calls
     if window:
-        wait(lambda: window.values['top']['text'] == 'MISSING / UNKNOWN', 'L in GUI')
-        assert window.values['side']['text'] == 'PRESENT / UNKNOWN'
+        wait(lambda: window.values['top']['text'] == 'PRESENT / UNKNOWN', 'L in GUI')
+        assert window.values['side']['text'] == 'MISSING / UNKNOWN'
+        assert window.captions['top']['text'] == 'Left(L) 존재 / 체결'
+        assert window.captions['side']['text'] == 'Right(R) 존재 / 체결'
     probe.command('done', source='voice')
     probe.wait(lambda: len(probe.results) == 1, 'independent fastening result')
     result = probe.results[-1]
     assert result.task_id == job.task_id and result.source == 'voice'
-    assert (result.outcome, result.fastening_l, result.fastening_f) == ('FAIL', 'SEATED', 'NOT_SEATED')
+    assert (result.outcome, result.fastening_l, result.fastening_r) == ('FAIL', 'SEATED', 'NOT_SEATED')
     assert list(result.states) == ['READY', 'INSPECT', 'WAIT_WORKER', 'RECHECK', 'VERIFY', 'REPORT']
     if window:
-        wait(lambda: window.values['side']['text'] == 'PRESENT / NOT_SEATED', 'F fastening in GUI')
+        wait(lambda: window.values['side']['text'] == 'PRESENT / NOT_SEATED', 'R fastening in GUI')
     assert force_calls == [job.task_id]
 
     origin = 'FAKE'
@@ -66,7 +68,7 @@ def exercise(probe, data, window=None, wait=None):
     presence['INSPECT'] = ('UNKNOWN', 'PRESENT')
     probe.command('check')
     probe.wait(lambda: len(probe.results) == 3, 'unknown is independent')
-    assert (probe.results[-1].presence_l, probe.results[-1].presence_f) == ('UNKNOWN', 'PRESENT')
+    assert (probe.results[-1].presence_l, probe.results[-1].presence_r) == ('UNKNOWN', 'PRESENT')
     assert probe.results[-1].outcome == 'HOLD'
 
     presence['INSPECT'] = ('PRESENT', 'PRESENT')
@@ -91,7 +93,8 @@ def exercise(probe, data, window=None, wait=None):
 
     probe.wait(journal_written, 'persist all results')
     records = read_jsonl(Path(data) / 'task_results.jsonl')
-    assert records[0]['fastening_f'] == 'NOT_SEATED'
+    for key in ('presence_l', 'presence_r', 'fastening_l', 'fastening_r'):
+        assert records[0][key] == getattr(result, key)
     assert records[4]['stop_reason'] == 'operator_stop'
 
 

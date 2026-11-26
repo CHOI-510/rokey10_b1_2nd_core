@@ -9,4 +9,4 @@ builtin_interfaces/Time stamp
 string origin
 bool verified
 string presence_l
-string presence_f
+string presence_r

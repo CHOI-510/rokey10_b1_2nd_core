@@ -55,8 +55,8 @@ P0-a 관제 코어(Fake 9단계 CLI 완주), JSONL 및 Episode 계약 → P0-b �
 - 필드, 실행 정책과 변경 사유는 INTERFACES.md와 DEVELOPMENT.md에 기록한다.
 
 
-## P0-b L/F 결과 통합
+## P0-b L/R 결과 통합
 
 - `mode:=fake`는 위 단일 볼트 조립 시퀀스를 실행합니다.
-- `mode:=inspection`은 같은 패키지와 FSM의 상태를 재사용합니다. L/F별 존재 검사를 받고 작업자 준비 후 재검사합니다. 두 볼트가 확인되면 VERIFY에서 외부 체결 검사 결과를 읽습니다.
-- L/F 검사 모드에서 Robot Action, 자동 공구 인계·거치 및 마무리 조임은 실행 범위에 포함되지 않습니다. 서비스 계약, 판정 근거와 실패 처리 기준은 [INTERFACES.md](INTERFACES.md#lf-최소-통합-계약)에 있습니다.
+- `mode:=inspection`은 같은 패키지와 FSM의 상태를 재사용합니다. L/R별 존재 검사를 받고 작업자 준비 후 재검사합니다. 두 볼트가 확인되면 VERIFY에서 외부 체결 검사 결과를 읽습니다.
+- L/R 검사 모드에서 Robot Action, 자동 공구 인계·거치 및 마무리 조임은 실행 범위에 포함되지 않습니다. 서비스 계약, 판정 근거와 실패 처리 기준은 [INTERFACES.md](INTERFACES.md#lr-최소-통합-계약)에 있습니다.

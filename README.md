@@ -1,6 +1,6 @@
 # rokey10_b1_2nd_core
 
-협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복구, JSONL 및 Episode 기록을 실행합니다. Fake 통합 시나리오 10개와 관리자 GUI **CORE MONITOR**의 조작·상태 표시를 검증했습니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다. 외부 결과를 연결하는 팀원은 [L/F 검사 전용 실행](#lf-외부-검사-결과-통합)을 사용합니다.
+협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복구, JSONL 및 Episode 기록을 실행합니다. Fake 통합 시나리오 10개와 관리자 GUI **CORE MONITOR**의 조작·상태 표시를 검증했습니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다. 외부 결과를 연결하는 팀원은 [L/R 검사 전용 실행](#lr-외부-검사-결과-통합)을 사용합니다.
 
 실물 통합에는 두산 M0609·RG2 어댑터, 카메라·힘 센서 발행기, YOLO 연동, 독립 그리퍼 상태와 현장 안전 검증이 남아 있습니다. [로드맵](docs/ROADMAP.md)
 
@@ -104,6 +104,6 @@ python3 tests/monitor_integration.py
 
 [설계 기준](docs/DESIGN_V0.1.md) · [아키텍처](docs/ARCHITECTURE.md) · [인터페이스](docs/INTERFACES.md) · [안전](docs/SAFETY.md) · [개발·검증](docs/DEVELOPMENT.md) · [로드맵](docs/ROADMAP.md) · [Git](docs/GIT_GUIDE.md)
 
-## L/F 외부 검사 결과 통합
+## L/R 외부 검사 결과 통합
 
-`ros2 launch core_bringup system.launch.py mode:=inspection gui:=true`로 외부 검사 결과를 받습니다. CHECK로 L/F 존재를 확인하고 WORKER DONE 뒤 재검사합니다. 두 위치가 모두 PRESENT이면 외부 체결 상태 검사 결과를 표시·기록합니다. 이 모드는 외부 결과를 읽으며 Robot Node와 자동 조립 동작은 실행 범위에 포함되지 않습니다. 팀원 서비스 계약, 음성 명령 예시 및 DB 구독은 [L/F 통합 계약](docs/INTERFACES.md#lf-최소-통합-계약)을 참고하세요.
+`ros2 launch core_bringup system.launch.py mode:=inspection gui:=true`로 외부 검사 결과를 받습니다. CHECK로 L/R 존재를 확인하고 WORKER DONE 뒤 재검사합니다. 두 위치가 모두 PRESENT이면 외부 체결 상태 검사 결과를 표시·기록합니다. 이 모드는 외부 결과를 읽으며 Robot Node와 자동 조립 동작은 실행 범위에 포함되지 않습니다. 팀원 서비스 계약, 음성 명령 예시 및 DB 구독은 [L/R 통합 계약](docs/INTERFACES.md#lr-최소-통합-계약)을 참고하세요.

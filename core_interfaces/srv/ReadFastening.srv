@@ -8,4 +8,4 @@ builtin_interfaces/Time stamp
 string origin
 bool verified
 string fastening_l
-string fastening_f
+string fastening_r

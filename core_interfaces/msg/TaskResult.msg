@@ -15,8 +15,8 @@ float64 peak_torque
 float64 turns
 string recipe_id
 string presence_l
-string presence_f
+string presence_r
 string fastening_l
-string fastening_f
+string fastening_r
 string presence_evidence
 string fastening_evidence

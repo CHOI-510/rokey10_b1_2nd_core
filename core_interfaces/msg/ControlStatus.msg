@@ -15,8 +15,8 @@ string[] allowed_commands
 string[] states
 string last_task_id
 string presence_l
-string presence_f
+string presence_r
 string fastening_l
-string fastening_f
+string fastening_r
 string presence_evidence
 string fastening_evidence
