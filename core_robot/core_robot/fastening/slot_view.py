@@ -14,7 +14,7 @@
   비켜선 상태의 회전은 fasten_test 와 똑같이 "볼트 축으로 돌아가 회전 → 다시 비켜서기" 로 한다.
   좋은 자리를 찾으면 터미널에 찍힌 VIEW_H · VIEW_OFFSET_TOOL 값을 fasten_core.py 에 옮겨 적는다.
 
-core_common.topics.CAMERA_COLOR의 ROS Image를 구독한다. --camera-topic으로 지정할 수 있다.
+기본 ROS Image 토픽은 --ros-args -p camera_topic:=<토픽>으로 덮어쓸 수 있다.
 보정 해상도와 다르면 ROI를 쓰지 않는다.
 로봇을 움직일 때는 터미널 1 에서 s → sodreal(또는 sodvir) 브링업이 떠 있어야 한다.
 """
@@ -25,7 +25,11 @@ import time
 from collections import deque
 from contextlib import ExitStack
 
+import rclpy
+from rclpy.utilities import remove_ros_args
+
 from core_common import topics
+from core_common.ros_context import ros_context
 
 import cv2
 
@@ -42,15 +46,11 @@ N_FRAMES = 10          # fasten_core 의 VISION_FRAMES 와 같게 — 화면 판
 class Robot:
     """slot_view 용 최소 로봇 제어 — fasten_core 의 상수 · TCP 설정을 그대로 쓴다."""
 
-    def __init__(self, bolt_id, height):
-        import rclpy
+    def __init__(self, node, bolt_id, height):
         from . import fasten_core as ft
 
         self.ft = ft
-        self.rclpy = rclpy
-        if not rclpy.ok():
-            rclpy.init()
-        self.node = rclpy.create_node("slot_view", namespace=ft.ROBOT_ID)
+        self.node = node
         dr = ft.connect_dsr(self.node)      # DR_init 설정(name mangling 회피)은 connect_dsr 안에서
         self.dr = dr
         log = self.node.get_logger()
@@ -106,23 +106,16 @@ class Robot:
         self._shift(off)                           # 다시 비켜서기 → 볼트는 화면 같은 자리
         print(f"툴 {deg:+.0f}° → J6 {self.dr.get_current_posj()[5]:.1f}", flush=True)
 
-    def close(self):
-        self.node.destroy_node()
-        self.rclpy.try_shutdown()
 
 
 def main():
-    try:
-        from rclpy.utilities import remove_ros_args
-        argv = remove_ros_args(sys.argv)[1:]
-    except ImportError:
-        argv = sys.argv[1:]
+    argv = remove_ros_args(sys.argv)[1:]
     ap = argparse.ArgumentParser(description="홈 각도 검출 실시간 확인")
     ap.add_argument("--bolt", type=int, choices=[1, 2], help="이 볼트 위 보기 높이로 로봇을 옮긴 뒤 시작")
     ap.add_argument("--height", type=float, default=None, help="티칭점 위 높이 mm (기본 VIEW_H)")
-    ap.add_argument("--camera-topic", default=topics.CAMERA_COLOR, help="ROS 원본 Image 토픽")
+    ap.add_argument("--camera-topic", help=argparse.SUPPRESS)
     opts = ap.parse_args(argv)
-    if not opts.camera_topic:
+    if opts.camera_topic == '':
         ap.error("--camera-topic에는 토픽 이름이 필요합니다")
 
     calib = sv.load_calib()
@@ -130,24 +123,25 @@ def main():
     ref = calib["ref_deg"] if calib else None
     print(f"calib: {calib}")
 
-    with ExitStack() as stack:
+    with ros_context(), ExitStack() as stack:
+        namespace = topics.DSR_ROBOT_ID if opts.bolt else '/'
+        node = rclpy.create_node('slot_view', namespace=namespace)
+        stack.callback(node.destroy_node)
+        topic = node.declare_parameter('camera_topic', opts.camera_topic or topics.CAMERA_COLOR).value
+        if not topic:
+            ap.error("camera_topic에는 토픽 이름이 필요합니다")
+        cam = open_camera(topic, stack)
         robot = None
         if opts.bolt:
             from . import fasten_core as ft
-            robot = Robot(opts.bolt, opts.height if opts.height is not None else ft.VIEW_H)
-            stack.callback(robot.close)
-        cam = open_camera(opts.camera_topic, stack)
+            robot = Robot(node, opts.bolt, opts.height if opts.height is not None else ft.VIEW_H)
         stack.callback(cv2.destroyAllWindows)
         loop(cam, robot, calib, roi, ref)
 
 
 def open_camera(topic, stack):
     """Use a ROS Image subscription on a dedicated executor thread."""
-    import rclpy
     from .ros_image_camera import ros_camera_factory
-    if not rclpy.ok():
-        rclpy.init()
-        stack.callback(rclpy.try_shutdown)
     factory = stack.enter_context(ros_camera_factory(topic, node_name="slot_view_camera"))
     cam = factory(lambda: None)
     stack.callback(cam.close)
@@ -177,7 +171,7 @@ def loop(cam, robot, calib, roi, ref):
         frame = cam.read(timeout=0.5)
         if frame is None:
             if time.time() - last_wait > 3.0:
-                print("영상 없음 — ROS Image 발행기와 --camera-topic 확인", flush=True)
+                print("영상 없음 — ROS Image 발행기와 camera_topic 확인", flush=True)
                 last_wait = time.time()
             if cv2.waitKey(1) & 0xFF in (27, ord("q")):
                 break

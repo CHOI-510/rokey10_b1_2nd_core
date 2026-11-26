@@ -12,7 +12,7 @@ Build from ~/cobot2_ws after sourcing Jazzy:
 
 In another sourced terminal check `ros2 topic list` and calibrate:
 
-    ros2 run core_vision vision1_calibrate --topic /camera/camera/color/image_raw
+    ros2 run core_vision vision1_calibrate --ros-args -p camera_topic:=/camera/camera/color/image_raw
 
 Click physical L (Bolt 2) then R (Bolt 1), not image x order. S saves, C clears.
 Calibration is stored outside the repository. Recalibrate if camera moves.

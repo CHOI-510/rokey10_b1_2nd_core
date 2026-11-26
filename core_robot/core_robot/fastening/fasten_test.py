@@ -21,7 +21,7 @@
   ros2 run core_robot fasten_test --bolt 1 --sim --no-vision  # 가상: 힘 제어·그리퍼·비전 없이 순서만
   ros2 run core_robot slot_view                             # 로봇 없이 홈 각도 검출만 실시간 확인
 
-기본 영상은 core_common.topics.CAMERA_COLOR를 구독한다. 다른 토픽은 --camera-topic으로 지정한다.
+기본 영상은 core_common.topics.CAMERA_COLOR를 구독한다. 다른 토픽은 --ros-args -p camera_topic:=<토픽>으로 지정한다.
 영상 입력이나 해상도가 바뀌면 같은 영상 입력으로 --calib-vision을 다시 수행한다.
 
 좌표는 모두 로봇 base 기준(mm, deg). 책상은 base z = -27.1.
@@ -35,6 +35,7 @@ import time
 from contextlib import ExitStack
 
 import rclpy
+from rclpy.utilities import remove_ros_args
 
 from core_common import topics
 
@@ -67,7 +68,7 @@ def ros_camera_factory(topic):
 
 
 def main(args=None):
-    argv = rclpy.utilities.remove_ros_args(sys.argv)[1:]
+    argv = remove_ros_args(sys.argv)[1:]
     ap = argparse.ArgumentParser(description="협동2 코어테스트 나사 체결")
     ap.add_argument("--bolt", type=int, choices=sorted(BOLT_POSES_TAUGHT), required=True)
     ap.add_argument("--sim", action="store_true", help="가상: 힘 제어·그리퍼·비전 없이 동작 순서만")
@@ -75,20 +76,22 @@ def main(args=None):
     ap.add_argument("--no-vision", action="store_true", help="비전 정렬 없이 홈 찾기 회전만")
     ap.add_argument("--calib-vision", action="store_true",
                     help="비전 보정만 (ROI · 기준각 · 방향 저장). 드라이버를 다시 쥘 때마다 실행")
-    ap.add_argument("--camera-topic", default=None, help=f"ROS 원본 Image 토픽 (기본 {topics.CAMERA_COLOR})")
+    ap.add_argument("--camera-topic", help=argparse.SUPPRESS)
     opts = ap.parse_args(argv)
     if opts.calib_vision and (opts.no_vision or opts.sim):
         ap.error("--calib-vision 은 --no-vision / --sim 과 같이 쓸 수 없음")
 
-    if opts.camera_topic is not None and (not opts.camera_topic or opts.no_vision or opts.sim):
-        ap.error("--camera-topic에는 토픽 이름이 필요하고 --no-vision / --sim과 같이 쓸 수 없음")
+    use_camera = not (opts.no_vision or opts.sim)
+    if opts.camera_topic is not None and (not opts.camera_topic or not use_camera):
+        ap.error("카메라 토픽은 비전을 사용하는 경우에만 설정할 수 있습니다")
 
-    if not (opts.no_vision or opts.sim):
-        opts.camera_topic = opts.camera_topic or topics.CAMERA_COLOR
-
+    default_topic = (opts.camera_topic or topics.CAMERA_COLOR) if use_camera else ''
     rclpy.init(args=args)
     node = rclpy.create_node("fasten_test", namespace=ROBOT_ID)
     try:
+        opts.camera_topic = node.declare_parameter('camera_topic', default_topic).value
+        if bool(opts.camera_topic) != use_camera:
+            ap.error("비전 체결에는 camera_topic이 필요하며 --sim / --no-vision에서는 비워야 합니다")
         with ExitStack() as stack:
             run(node, opts, stack)
     finally:

@@ -175,7 +175,7 @@ def exercise(probe):
     jpeg = BytesIO()
     PillowImage.new('RGB', (640, 360), (40, 80, 140)).save(jpeg, 'JPEG')
     sample = CompressedImage(format='jpeg', data=jpeg.getvalue())
-    with monitor(probe, wrist_image_topic='/monitor_test/jpeg',
+    with monitor(probe, camera_topic='/monitor_test/jpeg',
                  wrist_image_type='compressed') as (_, window, wait):
         wait(lambda: window.values['state']['text'] == 'READY'
              and window.latest_result == probe.results[-1].task_id, 'restarted monitor replays result')

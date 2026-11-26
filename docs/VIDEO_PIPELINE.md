@@ -1,23 +1,31 @@
 # CORE 영상 입력
 
-카메라는 RealSense ROS 드라이버가 발행한 원본 `sensor_msgs/msg/Image`를 구독합니다. 기본 토픽과 관제의 기존 토픽·서비스·Action 이름은 `core_common/core_common/topics.py`에 있습니다.
+메인 카메라 이름은 `camera_topic` 한 곳에서 지정합니다. 이름을 생략하면 `core_common/core_common/topics.py`의 `CAMERA_COLOR` 값인 `/camera/camera/color/image_raw`를 구독합니다. RealSense 드라이버가 이미 발행 중인 이름은 `ros2 topic list -t`로 확인할 수 있습니다.
 
-| 소비자 | 기본 입력 | 이미 발행 중인 다른 토픽을 쓰는 경우 |
-|---|---|---|
-| 실물 체결 Action | `/camera/camera/color/image_raw` | Launch의 `camera_topic` |
-| Vision 1 L/R 검사 | 체결과 동일한 원본 Image | 고정 카메라가 있다면 `vision_camera_topic` 및 해당 카메라의 `vision_roi_file` |
-| GUI 손목 미리보기 | 체결과 동일한 토픽의 Raw Image | `wrist_image_topic`, 필요 시 `wrist_image_type:=compressed` |
-| `slot_view`, `fasten_test` | `/camera/camera/color/image_raw` | CLI의 `--camera-topic` |
-| Vision 1 ROI 보정 | `/camera/camera/color/image_raw` | CLI의 `--topic` |
-
-`mode:=fake`의 GUI 미리보기 기본값은 OFF입니다. 영상 구독을 확인할 때는 `preview_enabled:=true`를 지정합니다. 손목 이외의 화면과 Wrench는 `side_image_topic`, `wrench_topic`을 지정한 경우에만 구독합니다.
-
-같은 PC에서는 ROS 환경과 Domain을 맞춥니다. PC를 나눠 실행한다면 두 PC의 RMW·Domain과 DDS 검색 범위가 일치해야 합니다. `LOCALHOST` 범위에서는 다른 PC에 있는 발행기를 검색할 수 없습니다.
+## 통합 Launch
 
 ```bash
-ros2 topic list -t
-ros2 topic info /camera/camera/color/image_raw -v
-ros2 run core_robot slot_view
+CAMERA_TOPIC=/camera/camera/color/image_raw
+ros2 launch core_bringup system.launch.py mode:=real gui:=true camera_topic:="$CAMERA_TOPIC"
 ```
 
-`slot_view`를 위와 같이 인자 없이 실행하면 영상 진단만 합니다. 카메라 토픽 또는 해상도를 변경한 경우 검사 ROI와 체결 비전 보정이 실제로 사용하는 영상에 맞는지 확인합니다. GUI의 LIVE는 미리보기 수신 상태이며, 체결의 프레임 신선도와 보정 검사는 로봇 노드에서 확인합니다.
+실물 Launch는 원본 `sensor_msgs/msg/Image`를 쓰는 Vision 1, 체결, GUI 손목 미리보기에 같은 값을 전달합니다. Fake에서 미리보기를 확인하려면 `preview_enabled:=true`를 함께 지정합니다.
+
+별도 영상이 실제로 발행되는 경우에는 해당 역할의 입력만 덮어씁니다. `vision_camera_topic`은 고정 카메라로 L/R을 검사할 때 사용하고 해당 카메라의 `vision_roi_file`과 짝을 맞춥니다. `side_image_topic`은 GUI에 두 번째 영상을 표시할 때 사용합니다. `wrist_image_type`과 `side_image_type`은 영상 메시지 형식입니다. GUI 단독 실행에서는 `wrist_image_type:=compressed`로 압축 영상을 표시할 수 있습니다.
+
+## 카메라를 사용하는 단독 실행
+
+```bash
+ros2 run core_robot slot_view --ros-args -p camera_topic:="$CAMERA_TOPIC"
+ros2 run core_robot fasten_test --bolt 1 --skip-grip --ros-args -p camera_topic:="$CAMERA_TOPIC"
+ros2 run core_vision vision1_calibrate --ros-args -p camera_topic:="$CAMERA_TOPIC"
+ros2 run core_vision vision1_node --ros-args -p real_camera:=true -p camera_topic:="$CAMERA_TOPIC"
+ros2 run core_control monitor_gui --ros-args -p mode:=real -p camera_topic:="$CAMERA_TOPIC"
+ros2 run core_robot robot_node --ros-args -p mode:=real -p camera_topic:="$CAMERA_TOPIC"
+```
+
+통합 Launch를 실행할 때에는 그 안의 Vision 1, GUI, 로봇 노드가 기동합니다. 위 단독 명령은 각 구성 요소를 개별 실행할 때 사용합니다. `slot_view`는 `--bolt` 생략 시 영상 진단만 하고, `fasten_test`는 체결 동작을 실행합니다. `--calib-vision`을 사용한 체결 보정에도 같은 `camera_topic`을 지정합니다.
+
+`wrist_image_topic`을 쓰던 Launch와 GUI 단독 실행은 `camera_topic`으로 바꿉니다. 기존 진단 스크립트의 `--camera-topic` 및 Vision 1 보정의 `--topic`은 호환 입력입니다. ROS 파라미터와 함께 주면 `camera_topic` 파라미터가 우선합니다.
+
+카메라 토픽이나 해상도를 바꾸면 검사 ROI와 체결 비전 보정이 실제 영상에 맞는지 확인합니다. GUI의 LIVE는 미리보기 수신 상태입니다. 체결용 영상 프레임의 신선도와 보정은 로봇 노드에서 검사합니다. PC를 나누어 실행할 때는 ROS Domain, RMW와 DDS 검색 범위를 맞춥니다.

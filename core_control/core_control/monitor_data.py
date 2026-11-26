@@ -39,7 +39,7 @@ class MonitorNode(Node):
         if self.mode not in ('FAKE', 'REAL', 'INSPECTION'):
             raise ValueError('mode must be fake, real or inspection')
         self.cameras = {
-            'wrist': self.declare_parameter('wrist_image_topic', topics.CAMERA_COLOR).value,
+            'wrist': self.declare_parameter('camera_topic', topics.CAMERA_COLOR).value,
             'side': self.declare_parameter('side_image_topic', '').value,
         }
         self.preview_enabled = self.declare_parameter('preview_enabled', self.mode != 'FAKE').value

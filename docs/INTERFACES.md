@@ -96,7 +96,7 @@ Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용�
 
 | 용도 | 파라미터 | 기본값 | 표준 메시지 |
 |---|---|---|---|
-| 손목 영상 | `wrist_image_topic`, `wrist_image_type` | `/camera/camera/color/image_raw`, `raw` | Image 또는 CompressedImage |
+| 손목 영상 | `camera_topic`, `wrist_image_type` | `/camera/camera/color/image_raw`, `raw` | Image 또는 CompressedImage |
 | 측면 영상 | `side_image_topic`, `side_image_type` | 빈 문자열, `raw` | Image 또는 CompressedImage |
 | 체결 중 힘·모멘트 | `wrench_topic` | 빈 문자열 | `geometry_msgs/msg/WrenchStamped` |
 

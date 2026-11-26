@@ -38,7 +38,6 @@ def generate_launch_description():
             "'false' if '", mode, "' == 'fake' else 'true'"])),
         DeclareLaunchArgument('wrist_image_type', default_value='raw', choices=['raw', 'compressed']),
         DeclareLaunchArgument('side_image_type', default_value='raw', choices=['raw', 'compressed']),
-        DeclareLaunchArgument('wrist_image_topic', default_value=camera),
         DeclareLaunchArgument('side_image_topic', default_value=''),
         DeclareLaunchArgument('wrench_topic', default_value=''),
         Node(package='core_robot', executable='robot_node', name='robot_node', output='screen',
@@ -62,9 +61,10 @@ def generate_launch_description():
         Node(package='core_control', executable='monitor_gui', name='monitor_gui', output='screen',
              condition=IfCondition(LaunchConfiguration('gui')),
              parameters=[{'mode': mode, 'preview_enabled': ParameterValue(
-                 LaunchConfiguration('preview_enabled'), value_type=bool), **{
+                 LaunchConfiguration('preview_enabled'), value_type=bool),
+                 'camera_topic': ParameterValue(camera, value_type=str), **{
                  name: ParameterValue(LaunchConfiguration(name), value_type=str)
-                 for name in ('wrist_image_topic', 'side_image_topic', 'wrist_image_type',
+                 for name in ('side_image_topic', 'wrist_image_type',
                               'side_image_type', 'wrench_topic')
              }}]),
         Node(package='core_language', executable='voice_node', output='screen',

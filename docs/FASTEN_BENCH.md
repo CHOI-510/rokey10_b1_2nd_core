@@ -17,7 +17,7 @@ M0609 + RG2 가 쥔 일자 드라이버로 십자 홈 (장난감) 볼트를 조�
 
 - 하드웨어 오버레이에 `doosan-robot2` (DSR_ROBOT2), `m0609_rg2_bringup`, `cobot2/robot_control` (그리퍼 `robot_control.onrobot` — `--skip-grip` 만 쓰면 불필요)
 - `python3-opencv`, `python3-numpy`, ROS Jazzy의 `cv_bridge`
-- 카메라의 원본 ROS Image가 기본 `/camera/camera/color/image_raw`에 발행되어야 합니다. 기존 발행 이름이 다르면 진단 명령에 `--camera-topic`을 지정합니다.
+- 카메라의 원본 ROS Image가 기본 `/camera/camera/color/image_raw`에 발행되어야 합니다. 기존 발행 이름이 다르면 진단 명령에 `--ros-args -p camera_topic:=<토픽>`을 지정합니다.
 
 빌드는 [CORE 설치 절차](../README.md#설치-및-빌드)를 따릅니다. ROS 원본 영상은 [카메라 입력 예제](REAL_FASTEN.md)를 확인하세요.
 

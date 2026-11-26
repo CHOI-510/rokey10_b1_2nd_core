@@ -102,7 +102,7 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 
 Fake 실행은 GUI 영상 구독을 기본으로 끕니다. 미리보기를 시험할 때는 `preview_enabled:=true`를 사용합니다. 실물에서는 손목 미리보기, Vision 1과 체결이 `core_common.topics.CAMERA_COLOR`의 원본 영상을 기본으로 구독합니다.
 
-기본 영상은 `/camera/camera/color/image_raw`입니다. 다른 이름으로 발행 중이면 Launch의 `camera_topic`만 지정합니다. 선택 입력과 DDS 확인 방법은 [영상 입력](docs/VIDEO_PIPELINE.md)을 참고하세요. 공통 인터페이스가 바뀌었으므로 관제·Robot·GUI·언어 및 외부 소비자는 같은 변경본을 빌드해야 합니다. [팀 재빌드](docs/DEVELOPMENT.md#안정화-변경과-팀-재빌드)
+기본 영상은 `/camera/camera/color/image_raw`입니다. 다른 이름으로 발행 중이면 Launch에 `camera_topic:=<토픽>`, 카메라를 쓰는 단독 명령에는 `--ros-args -p camera_topic:=<토픽>`을 사용합니다. 선택 입력과 DDS 확인 방법은 [영상 입력](docs/VIDEO_PIPELINE.md)을 참고하세요. 공통 인터페이스가 바뀌었으므로 관제·Robot·GUI·언어 및 외부 소비자는 같은 변경본을 빌드해야 합니다. [팀 재빌드](docs/DEVELOPMENT.md#안정화-변경과-팀-재빌드)
 
 ## 통합 테스트
 
