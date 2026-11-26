@@ -5,7 +5,9 @@ string holder_id
 ---
 bool success
 int32 error_code
+string stop_reason
 ---
 string stage
 string log_level
 string log_msg
+uint32 progress

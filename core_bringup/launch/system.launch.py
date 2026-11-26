@@ -22,12 +22,27 @@ def generate_launch_description():
         DeclareLaunchArgument('data_dir', default_value='data'),
         DeclareLaunchArgument('voice', default_value='false'),
         DeclareLaunchArgument('llm', default_value='false'),
+        DeclareLaunchArgument('gui', default_value='false'),
+        DeclareLaunchArgument('preview_enabled', default_value='true'),
+        DeclareLaunchArgument('wrist_image_type', default_value='raw', choices=['raw', 'compressed']),
+        DeclareLaunchArgument('side_image_type', default_value='raw', choices=['raw', 'compressed']),
+        DeclareLaunchArgument('wrist_image_topic', default_value='/camera/color/image_raw'),
+        DeclareLaunchArgument('side_image_topic', default_value=''),
+        DeclareLaunchArgument('wrench_topic', default_value=''),
         Node(package='core_robot', executable='robot_node', name='robot_node', output='screen',
              parameters=[str(config / 'robot.yaml'), base, {'scenario': scenario}]),
         Node(package='core_vision', executable='vision_node', name='vision_node', output='screen',
              parameters=[{'mode': mode, 'scenario': scenario}]),
         Node(package='core_control', executable='control', name='control', output='screen',
              parameters=[str(config / 'workspace.yaml'), base]),
+        Node(package='core_control', executable='monitor_gui', name='monitor_gui', output='screen',
+             condition=IfCondition(LaunchConfiguration('gui')),
+             parameters=[{'mode': mode, 'preview_enabled': ParameterValue(
+                 LaunchConfiguration('preview_enabled'), value_type=bool), **{
+                 name: ParameterValue(LaunchConfiguration(name), value_type=str)
+                 for name in ('wrist_image_topic', 'side_image_topic', 'wrist_image_type',
+                              'side_image_type', 'wrench_topic')
+             }}]),
         Node(package='core_language', executable='voice_node', output='screen',
              condition=IfCondition(LaunchConfiguration('voice'))),
         Node(package='core_language', executable='llm_node', output='screen',

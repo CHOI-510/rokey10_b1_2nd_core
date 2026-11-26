@@ -1,4 +1,19 @@
 control:
   ros__parameters:
-    request_timeout: 5.0
+    goal_timeout: 5.0
+    move_to_timeout: 15.0
+    fetch_timeout: 30.0
+    stow_timeout: 30.0
+    fasten_timeout: 30.0
+    cancel_timeout: 2.0
+    action_settle_timeout: 3.0
+    progress_timeout: 3.0
+    feedback_timeout: 3.0
+    inspect_timeout: 5.0
+    locate_timeout: 5.0
+    heartbeat_period: 0.2
+    robot_heartbeat_timeout: 1.0
+    stop_response_timeout: 1.0
+    resume_response_timeout: 2.0
+    stop_attempts: 3
     worker_timeout: 120.0

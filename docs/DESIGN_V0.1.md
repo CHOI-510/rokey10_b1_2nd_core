@@ -50,5 +50,6 @@ P0-a 관제 코어(Fake 9단계 CLI 완주), JSONL 및 Episode 계약 → P0-b �
 ## P0-a 적용 사항
 
 - 볼트 누락 경로에서는 RECHECK에서 상단과 측면을 검사한다. 볼트가 있는 경로에서는 INSPECT에서 상단과 측면을 검사한다.
-- 정지 시 STOPPED 상태를 유지하면서 결과를 기록한다. 복구 시 새 작업을 받을 수 있는 READY로 전환한다.
+- 정지 시 STOPPED 상태를 유지하며 최초 원인과 결과를 기록한다. 물리 상태가 불확실하면 RECOVER에서 관리자 확인을 기다린다. 안전 조건과 동작 종료가 확인되면 명시적 RESUME 이후 새 작업을 받을 수 있다.
+- 관제 스냅샷과 마지막 작업 결과를 DDS로 제공한다. GUI는 기존 ROS 영상 토픽을 Preview로 표시하며, Vision Input 및 기존 RTP/JPEG Unicast를 독립적으로 운영한다.
 - 필드, 실행 정책과 변경 사유는 INTERFACES.md와 DEVELOPMENT.md에 기록한다.

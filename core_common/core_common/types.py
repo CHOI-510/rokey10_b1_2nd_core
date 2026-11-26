@@ -36,3 +36,4 @@ class State(StrEnum):
     VERIFY = 'VERIFY'
     REPORT = 'REPORT'
     STOPPED = 'STOPPED'
+    RECOVER = "RECOVER"

@@ -20,7 +20,7 @@ def main():
             client = node.create_client(interface, name)
             if not client.wait_for_service(timeout_sec=3):
                 parser.exit(1, f'{name} unavailable\n')
-            future = client.call_async(interface.Request(command=args.command))
+            future = client.call_async(interface.Request(command=args.command, source='cli'))
             rclpy.spin_until_future_complete(node, future, timeout_sec=3)
             if not future.done():
                 parser.exit(1, 'Command response timed out\n')

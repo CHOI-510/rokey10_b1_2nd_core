@@ -5,11 +5,14 @@ string recipe_id
 ---
 bool success
 int32 error_code
+string stop_reason
 string state
 float64 peak_torque
 float64 turns
+bool tightening_valid
 string episode_id
 ---
 string stage
 string log_level
 string log_msg
+uint32 progress

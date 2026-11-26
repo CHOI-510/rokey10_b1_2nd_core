@@ -15,13 +15,16 @@
 ```mermaid
 flowchart LR
     M["CORE MONITOR / monitor_gui"] -->|"/job_command · /emergency_stop"| C["control · 단일 FSM"]
+    M -->|"직접 STOP"| R
     CLI["control_interface"] -->|"/job_command · /emergency_stop"| C
     C -->|"Actions · /robot/emergency_stop"| R["robot_node"]
     C -->|"/inspect · /locate"| V["vision_node"]
+    C -->|"/control_status heartbeat"| R
     R -->|"/robot_status"| C
     R -->|"/robot_status"| M
     C -->|"/control_status · /event_log · /task_result"| M
-    S["선택 영상 · Wrench 발행기"] --> M
+    S["기존 ROS 영상 · Wrench 발행기"] --> M
+    S -->|"기존 ROS JPEG"| U["UDP 송신기 → 기존 비전 PC"]
     C --> J["결과·이벤트 JSONL"]
     R --> E["Episode"]
 ```
@@ -36,8 +39,12 @@ flowchart LR
     INSPECT -->|MISSING| FETCH --> WAIT_WORKER
     WAIT_WORKER -->|done · 3초 · 이동 허가| RECHECK --> STOW
     INSPECT -->|PRESENT| STOW
-    STOW --> FASTEN --> VERIFY --> REPORT --> READY
+    STOW --> FASTEN --> VERIFY --> REPORT
+    REPORT -->|안전 상태 확인| READY
+    REPORT -->|상태 미확인| RECOVER -->|resume · 안전 상태 확인| READY
     STOPPED -->|resume · 안전 상태 확인| READY
 ```
 
 관제는 검사 뷰로 이동한 뒤 Vision에 판정을 요청합니다. 누락 경로는 RECHECK에서 상단과 측면을 검사하고, 볼트가 처음부터 있으면 INSPECT에서 두 검사를 수행합니다. 측면 판정에 따라 마무리 체결 또는 확인 조임을 선택합니다. 판정 불명, 센서 불일치와 취소는 HOLD이며, 미체결은 FAIL입니다. 정지 시에는 STOPPED를 유지하면서 결과를 기록합니다. 명시적으로 복귀한 뒤에는 READY에서 새 작업을 받을 수 있습니다.
+
+관제와 Robot은 각각 제한된 비동기 기록 큐를 사용합니다. 영상 Preview의 수신·디코딩은 GUI 프로세스에 있으며 GUI 종료와 Preview 장애는 FSM에 영향을 주지 않습니다. [영상 파이프라인](VIDEO_PIPELINE.md)

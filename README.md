@@ -1,6 +1,6 @@
 # rokey10_b1_2nd_core
 
-협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복귀, JSONL 및 Episode 기록을 실행합니다. Fake 통합 시나리오 10개와 관리자 GUI **CORE MONITOR**의 조작·상태 표시를 검증했습니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다.
+협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복구, JSONL 및 Episode 기록을 실행합니다. Fake 통합 시나리오 10개와 관리자 GUI **CORE MONITOR**의 조작·상태 표시를 검증했습니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다.
 
 실물 통합에는 두산 M0609·RG2 어댑터, 카메라·힘 센서 발행기, YOLO 연동, 독립 그리퍼 상태와 현장 안전 검증이 남아 있습니다. [로드맵](docs/ROADMAP.md)
 
@@ -40,7 +40,7 @@ ros2 launch core_bringup system.launch.py mode:=fake
 다른 터미널에서 상태를 보거나 아래 CLI 명령 중 필요한 명령을 실행합니다.
 
 ```bash
-ros2 topic echo /control_status
+ros2 topic echo /control_status --qos-durability transient_local
 ros2 run core_control control_interface check
 ros2 run core_control control_interface done
 ros2 run core_control control_interface cancel
@@ -68,9 +68,9 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 |---|---|---|
 | CHECK | `check` | READY에서 이동 허가를 확인한 뒤 새 작업을 시작합니다. |
 | WORKER DONE | `done` | WAIT_WORKER의 현재 작업을 이어갑니다. 완료 접수 후 3초 대기와 이동 허가 확인을 거쳐 재검사합니다. |
-| RESUME | `resume` | STOPPED에서 명시적으로 복귀를 요청합니다. READY가 표시되면 CHECK로 새 작업을 시작할 수 있습니다. |
+| RESUME | `resume` | STOPPED 또는 RECOVER에서 물리 조건을 확인한 뒤 명시적으로 복귀를 요청합니다. READY가 표시되면 CHECK로 새 작업을 시작할 수 있습니다. |
 | CANCEL | `cancel` | 진행 중인 작업의 취소를 요청합니다. |
-| STOP | `stop` | 관제에 소프트웨어 정지를 요청합니다. 물리적 비상정지 장치가 필요합니다. |
+| STOP | `stop` | GUI는 관제와 Robot에 독립적으로 소프트웨어 정지를 요청합니다. CLI는 관제 경로를 호출합니다. 물리적 비상정지 장치가 필요합니다. |
 
 ### 볼트 누락 예제
 
@@ -81,12 +81,16 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 
 기본 Fake 실행에는 영상·Wrench 발행기가 없습니다. 손목 카메라의 기본 토픽은 `/camera/color/image_raw`이며 화면에는 NO SIGNAL이 표시됩니다. 측면 카메라는 토픽을 비워 OFF로 표시하고 체결 패널은 N/A로 표시합니다. 외부 발행기를 연결할 때는 Launch 인자 `wrist_image_topic`, `side_image_topic`, `wrench_topic`을 사용합니다. 구독 형식, 신호 표시와 MOCK의 의미는 [통신 계약](docs/INTERFACES.md#관리자-gui)을 참고합니다.
 
+JPEG Preview와 기존 UDP 송수신 실행법은 [영상 파이프라인](docs/VIDEO_PIPELINE.md)에 있습니다. 공통 인터페이스가 바뀌었으므로 관제·Robot·GUI·언어 및 외부 소비자는 같은 변경본을 빌드해야 합니다. [팀 재빌드](docs/DEVELOPMENT.md#안정화-변경과-팀-재빌드)
+
 ## 통합 테스트
 
 같은 Domain에서 실행 중인 Core Launch를 종료한 뒤 저장소 루트에서 실행합니다. 테스트는 Fake Launch를 자체 기동하고 임시 디렉터리에 기록합니다.
 
 ```bash
 python3 tests/fake_integration.py
+python3 tests/stability_integration.py
+python3 tests/video_pipeline.py
 # 그래픽 디스플레이가 있는 터미널에서 실행
 python3 tests/monitor_integration.py
 ```

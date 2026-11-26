@@ -13,6 +13,9 @@ class FakeRobot(RobotAPI):
     def safe_to_move(self):
         return self.motion_permission()
 
+    def request_stop(self):
+        """Fake has no hardware motion. A real adapter must issue the controller stop API."""
+
     def move_to(self, view_id):
         target = TargetPose(valid=True)
         target.pose.header.frame_id = FAKE_FRAME
