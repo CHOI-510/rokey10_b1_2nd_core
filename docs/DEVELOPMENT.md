@@ -36,7 +36,8 @@ ros2 action send_goal /move_to core_interfaces/action/MoveTo '{task_id: dev, vie
 # 관제 단독 실행. Robot과 Vision은 별도 터미널에서 실행
 ros2 run core_control control --ros-args --params-file core_bringup/config/workspace.yaml
 
-# 비전 담당. 독립적인 Fake 검사 및 좌표 취득
+# 비전 담당. 현재 L/R 관제용 서비스 확인 및 초기 단독 진단
+ros2 service call /integration/inspect_positions core_interfaces/srv/InspectPositions '{task_id: dev, stage: INSPECT}'
 ros2 run core_vision vision_node --ros-args -p scenario:=partial
 ros2 service call /inspect core_interfaces/srv/Inspect '{task_id: dev, stage: INSPECT, view_id: top}'
 ros2 service call /locate core_interfaces/srv/Locate '{task_id: dev, item_id: driver}'
@@ -178,3 +179,7 @@ M0609·RG2 구동, 실제 정지 회로와 제어기 확인, D435i 캡처·인�
 검증은 `python3 tests/inspection_integration.py` 또는 그래픽 세션에서 `python3 tests/inspection_integration.py --gui`로 수행합니다. 시험 공급자는 합성 응답으로 계약 분기를 검사합니다. 팀원 장비의 관측 및 알고리즘 검증은 별도입니다.
 
 로컬 Cyclone DDS에서 7개 패키지 빌드, L/R 합성 공급자·GUI·JSONL 시험, Fake 공정 10개, 장애 주입 12개, 기존 CORE MONITOR 회귀를 통과했습니다. 장애 주입 종료 중 기존 rclpy 리소스 해제 경고가 발생했습니다. 실제 L/R 영상 및 힘·순응제어 알고리즘은 담당자 공급자를 연결한 현장 시험 대상입니다.
+
+## 현재 Fake L/R 통합 시험
+
+`tests/fake_integration.py`는 GUI 없이 동일한 ROS 공급자, L/R 결과와 두 Action Episode를 확인합니다. `tests/monitor_integration.py`는 GUI의 CHECK·WORKER DONE, 위치별 표시·결과·ROS 미리보기를 시험합니다. `tests/stability_integration.py`는 Vision 서비스 또는 Fasten 서버 누락과 Vision 응답 지연을 포함합니다. 위의 초기 P0-a 결과는 단일 볼트 당시 검증 기록입니다.

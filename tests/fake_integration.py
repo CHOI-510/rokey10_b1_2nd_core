@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the P0-a scenarios against the installed launch and ROS interfaces."""
+"""Run the L/R fake scenarios against the installed launch and ROS interfaces."""
 import json
 import signal
 import subprocess
@@ -14,8 +14,8 @@ from core_common.ros_context import ros_context
 from core_interfaces.msg import ControlStatus, RobotStatus, TaskResult
 from core_interfaces.srv import EmergencyStop, JobCommand
 
-FULL = ['READY', 'INSPECT', 'FETCH', 'WAIT_WORKER', 'RECHECK', 'STOW', 'FASTEN', 'VERIFY', 'REPORT']
-PRESENT = ['READY', 'INSPECT', 'STOW', 'FASTEN', 'VERIFY', 'REPORT']
+FULL = ['READY', 'INSPECT', 'WAIT_WORKER', 'RECHECK', 'FASTEN', 'VERIFY', 'REPORT']
+PRESENT = ['READY', 'INSPECT', 'FASTEN', 'VERIFY', 'REPORT']
 
 
 def read_jsonl(path):
@@ -66,7 +66,7 @@ def run_case(label, scenario, outcome, reason, states, recipe=None,
         data = Path(directory)
         with (data / 'launch.log').open('w+') as log:
             process = subprocess.Popen(
-                ['ros2', 'launch', 'core_bringup', 'system.launch.py', 'mode:=fake',
+                ['ros2', 'launch', 'core_bringup', 'system.launch.py', 'mode:=fake', 'gui:=false',
                  f'scenario:={scenario}', f'data_dir:={data}', 'llm:=false'],
                 stdout=log, stderr=subprocess.STDOUT,
             )
@@ -86,11 +86,13 @@ def run_case(label, scenario, outcome, reason, states, recipe=None,
                     probe.command('check')
                 if scenario == 'missing':
                     probe.wait(lambda: probe.status == 'WAIT_WORKER', 'operator handoff')
+                    assert (probe.snapshot.presence_l, probe.snapshot.presence_r) == ('MISSING', 'PRESENT')
+                    assert (probe.snapshot.fastening_l, probe.snapshot.fastening_r) == ('UNKNOWN', 'UNKNOWN')
                     if interruption:
                         probe.command(interruption)
                     else:
                         probe.command('done')
-                probe.wait(lambda: len(probe.results) == 1, 'task result')
+                probe.wait(lambda: len(probe.results) == 1, 'task result', timeout=20)
                 result = probe.results[0]
                 assert (result.outcome, result.reason, list(result.states)) == (outcome, reason, states), result
                 probe.wait(lambda: (data / 'task_results.jsonl').exists()
@@ -109,8 +111,17 @@ def run_case(label, scenario, outcome, reason, states, recipe=None,
                     assert metadata['task_id'] == result.task_id and metadata['mode'] == 'fake'
                     episode_result = json.loads((episode / 'result.json').read_text())
                     assert episode_result['success'] == (outcome != 'FAIL'), episode_result
-                    assert result.tightening_valid
+                    assert result.tightening_valid == (outcome != 'FAIL')
                     assert result.recipe_id == recipe
+                    assert result.presence_evidence == 'FAKE'
+                    assert result.fastening_evidence == 'FAKE_ACTION_RESULT'
+                    assert result.fastening_l == 'SEATED'
+                    assert result.fastening_r == ('NOT_SEATED' if outcome == 'FAIL' else 'SEATED')
+                    assert episode_result['point_id'] == 'R'
+                    probe.wait(lambda: len(list((data / 'episodes').glob('*/result.json'))) == 2,
+                               'both L/R action episodes')
+                    assert {json.loads(p.read_text())['point_id']
+                            for p in (data / 'episodes').glob('*/result.json')} == {'L', 'R'}
                     assert (result.peak_torque, result.turns) == (
                         episode_result['peak_torque_nm'], episode_result['turns'])
                     assert recipe in (episode / 'trajectory.csv').read_text()
@@ -149,19 +160,19 @@ def run_case(label, scenario, outcome, reason, states, recipe=None,
 
 def main():
     cases = [
-        ('missing bolt', 'missing', 'PASS', 'verified_seated', FULL, 'finish'),
-        ('partially seated', 'partial', 'PASS', 'verified_seated', PRESENT, 'finish'),
-        ('fully seated', 'seated', 'PASS', 'verified_seated', PRESENT, 'confirm'),
-        ('unknown vision', 'vision_unknown', 'HOLD', 'bolt_presence_or_pose_unconfirmed',
+        ('missing bolt', 'missing', 'PASS', 'lr_present_after_fake_fasten', FULL, 'finish'),
+        ('partially seated', 'partial', 'PASS', 'lr_present_after_fake_fasten', PRESENT, 'finish'),
+        ('both present (legacy seated fixture)', 'seated', 'PASS', 'lr_present_after_fake_fasten', PRESENT, 'finish'),
+        ('unknown vision', 'vision_unknown', 'HOLD', 'position_presence_unknown',
          ['READY', 'INSPECT', 'REPORT']),
-        ('fastening failure', 'fasten_failure', 'FAIL', 'fastening_failed',
-         [*PRESENT[:4], 'REPORT'], 'finish'),
-        ('sensor mismatch', 'sensor_mismatch', 'HOLD', 'verification_sensor_mismatch_or_unknown',
+        ('fastening failure', 'fasten_failure', 'FAIL', 'r_not_seated',
+         [*PRESENT[:3], 'REPORT'], 'finish'),
+        ('sensor mismatch', 'sensor_mismatch', 'HOLD', 'position_bolt_missing',
          PRESENT, 'finish'),
-        ('operator stop', 'missing', 'HOLD', 'operator_stop', [*FULL[:4], 'STOPPED'], None, 'stop'),
-        ('DB offline', 'partial', 'PASS', 'verified_seated', PRESENT, 'finish', None, 'database_node'),
-        ('LLM offline', 'partial', 'PASS', 'verified_seated', PRESENT, 'finish', None, 'llm_node'),
-        ('operator cancel', 'missing', 'HOLD', 'cancelled', [*FULL[:4], 'REPORT'], None, 'cancel'),
+        ('operator stop', 'missing', 'HOLD', 'operator_stop', [*FULL[:3], 'STOPPED'], None, 'stop'),
+        ('DB offline', 'partial', 'PASS', 'lr_present_after_fake_fasten', PRESENT, 'finish', None, 'database_node'),
+        ('LLM offline', 'partial', 'PASS', 'lr_present_after_fake_fasten', PRESENT, 'finish', None, 'llm_node'),
+        ('operator cancel', 'missing', 'HOLD', 'cancelled', [*FULL[:3], 'REPORT'], None, 'cancel'),
     ]
     with ros_context():
         for case in cases:

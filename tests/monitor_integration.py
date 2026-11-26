@@ -126,12 +126,13 @@ def exercise(probe):
 
         click('check')
         wait(lambda: value('state') == 'WAIT_WORKER', 'GUI received WAIT_WORKER')
-        assert value('top') == 'MISSING'
+        assert value('top') == 'MISSING / UNKNOWN'
+        assert value('side') == 'PRESENT / UNKNOWN'
         assert '현재' in window.steps['WAIT_WORKER']['text']
         click('done')
         wait(lambda: value('final') == 'PASS', 'full path PASS', publish_wrench)
         assert (value('top'), value('side'), value('fastening')) == (
-            'PRESENT', 'NOT_PROTRUDING', 'SEATED')
+            'PRESENT / SEATED', 'PRESENT / SEATED', 'FAKE / FAKE_ACTION_RESULT')
         assert '완료' in window.steps['VERIFY']['text']
         assert 'MOCK' in window.metrics['text'] and '6.50 N' in window.metrics['text']
         journal = window.journal.get('1.0', 'end')

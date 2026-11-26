@@ -214,7 +214,7 @@ def standalone_cases():
 
 def launch_case(data):
     command = ['ros2', 'launch', 'core_bringup', 'system.launch.py',
-               'mode:=fake', f'camera_topic:={TOPIC}', f'data_dir:={data}']
+               'mode:=fake', 'gui:=false', f'camera_topic:={TOPIC}', f'data_dir:={data}']
     with (Path(data) / 'launch.log').open('w+') as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
         probe = rclpy.create_node('fasten_launch_probe')

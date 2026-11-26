@@ -16,7 +16,7 @@ from rclpy.task import Future
 from core_common.errors import ErrorCode
 from core_common.ros_context import ros_context
 from core_control.control import Control
-from core_interfaces.action import MoveTo, Stow
+from core_interfaces.action import Fasten
 from core_interfaces.srv import EmergencyStop
 from core_robot.robot_node import RobotNode
 from core_vision.vision_node import VisionNode
@@ -30,14 +30,20 @@ def options(**parameters):
 
 
 @contextmanager
-def system(*, control=None, robot=None):
+def system(*, control=None, robot=None, vision_online=True, fasten_online=True, vision_delay=None):
     with TemporaryDirectory(prefix='core-stability-') as data:
         executor = MultiThreadedExecutor(num_threads=6)
         probe = Probe()
         robot_node = RobotNode(**options(data_dir=data, scenario='partial', **(robot or {})))
-        vision = VisionNode()
-        vision.scenario = 'partial'
-        nodes = [robot_node, vision]
+        nodes = [robot_node]
+        if vision_online:
+            vision = VisionNode()
+            vision.scenario = 'partial'
+            if vision_delay is not None:
+                vision.inspection_seconds = vision_delay
+            nodes.append(vision)
+        if not fasten_online:
+            robot_node.servers.pop().destroy()
 
         def start_control():
             node = Control(**options(data_dir=data, heartbeat_period=0.05, **(control or {})))
@@ -82,8 +88,8 @@ def system(*, control=None, robot=None):
 
 def action_cases():
     cases = [
-        ('slow action', {}, {'action_seconds': 0.7}, 'verified_seated'),
-        ('execution timeout', {'move_to_timeout': 0.2}, {'action_seconds': 1.0},
+        ('slow action', {}, {'action_seconds': 0.7}, 'lr_present_after_fake_fasten'),
+        ('execution timeout', {'fasten_timeout': 0.2}, {'action_seconds': 1.0},
          'robot_action_timeout'),
         ('feedback timeout', {'feedback_timeout': 0.2},
          {'action_seconds': 1.0, 'fake_action_progress': False}, 'robot_action_feedback_timeout'),
@@ -202,9 +208,9 @@ def bounded_stop():
 
 
 def uncertain_action():
-    with system(control={'move_to_timeout': 0.2, 'action_settle_timeout': 0.2},
+    with system(control={'fasten_timeout': 0.2, 'action_settle_timeout': 0.2},
                 robot={'action_seconds': 1.0}) as (probe, control, _, _, _):
-        client = control.actions[MoveTo]
+        client = control.actions[Fasten]
         send = client.send_goal_async
         delayed_result = Future()
         actual_results = []
@@ -281,17 +287,17 @@ def held_tool():
     with system(control={}) as (probe, _, robot, _, _):
         run = robot.run
 
-        def fail_stow(kind, goal, result):
-            if kind is Stow:
+        def fail_fasten(kind, goal, result):
+            if kind is Fasten:
                 robot.gripper.command(0.0, 20.0)
-                robot.holding_item = goal.item_id
+                robot.holding_item = 'driver'
                 return ErrorCode.FAILED
             return run(kind, goal, result)
 
-        robot.run = fail_stow
+        robot.run = fail_fasten
         probe.command('check')
         probe.wait(lambda: probe.results and probe.status == 'RECOVER', 'tool still held')
-        assert probe.results[0].reason == 'stow_failed'
+        assert probe.results[0].reason == 'l_fastening_unconfirmed'
         probe.command('check', accepted=False)
         probe.command('resume', accepted=False)
         with robot.gate:
@@ -303,9 +309,39 @@ def held_tool():
         print('PASS held tool forces RECOVER and prohibits CHECK/RESUME until safe', flush=True)
 
 
+def absent_peers():
+    for vision_online, fasten_online, reason in (
+            (False, True, 'vision_service_unavailable'),
+            (True, False, 'robot_action_unavailable')):
+        with system(control={'inspectpositions_timeout': 0.5, 'goal_timeout': 0.5},
+                    vision_online=vision_online, fasten_online=fasten_online) as (probe, *_):
+            probe.command('check')
+            probe.wait(lambda: probe.results, reason)
+            result = probe.results[0]
+            assert (result.outcome, result.reason) == ('HOLD', reason), result
+            assert (result.fastening_l, result.fastening_r) == ('UNKNOWN', 'UNKNOWN')
+            assert not result.episode_id
+            print(f'PASS fake cycle waits for {reason}', flush=True)
+
+
+def delayed_vision():
+    with system(control={'inspectpositions_timeout': 0.5}, vision_delay=2.0) as (
+            probe, _, robot, _, _):
+        probe.command('check')
+        probe.wait(lambda: probe.snapshot.vision_status == 'WAITING REPLY', 'active vision request')
+        assert not probe.results and not robot.busy
+        probe.wait(lambda: probe.results, 'vision response timeout')
+        result = probe.results[0]
+        assert (result.outcome, result.reason) == ('HOLD', 'vision_service_timeout')
+        assert not result.episode_id and not robot.last_completed_goal_id
+        print('PASS fake cycle holds when discovered Vision does not reply in time', flush=True)
+
+
 if __name__ == '__main__':
     with ros_context():
         action_cases()
+        absent_peers()
+        delayed_vision()
         watchdog()
         direct_stop()
         lost_replies()

@@ -1,13 +1,11 @@
 from math import isfinite
-from time import monotonic
-
-from core_common.announcements import FETCH_COMPLETE, HANDOFF_COMPLETE, INSPECTION
+from core_common.config import FASTEN_POINTS
 from core_common.errors import ErrorCode as Error
 from core_common.status_qos import current_stamp, time_ns
 from core_common.types import Fastening, Outcome, Presence, Side, State
-from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
+from core_interfaces.action import Fasten
 from core_interfaces.msg import TargetPose
-from core_interfaces.srv import Inspect, InspectPositions, Locate, ReadFastening
+from core_interfaces.srv import InspectPositions, ReadFastening
 
 
 POSITION_FIELDS = ('presence_l', 'presence_r', 'fastening_l', 'fastening_r',
@@ -25,7 +23,7 @@ class TaskEnded(Exception):
         self.reason = reason
 
 
-class AssemblyTask:
+class PositionTask:
     def __init__(self, control, task_id, source):
         self.control = control
         self.task_id = task_id
@@ -42,50 +40,9 @@ class AssemblyTask:
         self.side = Side.UNKNOWN
         self.episode_id = ''
         self.last_goal_id = ''
-        self.presence_l = self.presence_r = ''
-        self.fastening_l = self.fastening_r = ''
-        self.presence_evidence = self.fastening_evidence = ''
-
-    def run(self):
-        self.control.transition(self, State.INSPECT)
-        top = self.inspect('top')
-        if top.presence == Presence.MISSING:
-            self.control.transition(self, State.FETCH)
-            for item in ('bolt', 'driver'):
-                self.action(Fetch, item_id=item, pick_pose=self.locate(item), dest_id='handoff')
-            self.control.transition(self, State.WAIT_WORKER)
-            self.control.announce(self, FETCH_COMPLETE)
-            self.control.wait_for(self, lambda: self.done, self.control.worker_timeout,
-                                  'worker_timeout')
-            self.control.announce(self, HANDOFF_COMPLETE)
-            until = monotonic() + 3
-            self.control.wait_for(self, lambda: monotonic() >= until, 4, 'handoff_delay_timeout')
-            self.control.require_clearance()
-            self.control.transition(self, State.RECHECK)
-            top = self.inspect('top')
-
-        if top.presence != Presence.PRESENT or not top.bolt_pose.valid:
-            raise TaskEnded(Outcome.HOLD, 'bolt_presence_or_pose_unconfirmed')
-        self.side = self.inspect('side').side
-        if self.side not in (Side.PROTRUDING, Side.NOT_PROTRUDING):
-            raise TaskEnded(Outcome.HOLD, 'side_inspection_unknown')
-
-        self.control.transition(self, State.STOW)
-        self.action(Stow, item_id='driver', grasp_pose=self.locate('driver'), holder_id='driver_holder')
-        self.control.transition(self, State.FASTEN)
-        self.recipe_id = 'confirm' if self.side == Side.NOT_PROTRUDING else 'finish'
-        result = self.action(Fasten, point_id='assembly_bolt', bolt_pose=top.bolt_pose, recipe_id=self.recipe_id)
-        if self.fastening == Fastening.NOT_SEATED:
-            raise TaskEnded(Outcome.FAIL, 'fastening_failed')
-        if not result.success:
-            raise TaskEnded(Outcome.HOLD, f'fasten_{Error(result.error_code).name.lower()}')
-        if self.fastening != Fastening.SEATED:
-            raise TaskEnded(Outcome.HOLD, 'fastening_unknown')
-        self.control.transition(self, State.VERIFY)
-        self.side = self.inspect('side').side
-        if self.side != Side.NOT_PROTRUDING:
-            raise TaskEnded(Outcome.HOLD, 'verification_sensor_mismatch_or_unknown')
-        return Outcome.PASS, 'verified_seated'
+        self.presence_l = self.presence_r = Presence.UNKNOWN
+        self.fastening_l = self.fastening_r = Fastening.UNKNOWN
+        self.presence_evidence = self.fastening_evidence = 'UNVERIFIED'
 
     def capture_fastening(self, result):
         with self.control.lock:
@@ -95,42 +52,46 @@ class AssemblyTask:
             self.tightening_valid = result.tightening_valid
             self.peak_torque, self.turns = result.peak_torque, result.turns
 
-    def action(self, kind, **fields):
-        result = self.control.action(self, kind, kind.Goal(task_id=self.task_id, **fields))
-        if kind is not Fasten and not result.success:
-            raise TaskEnded(Outcome.HOLD, f'{kind.__name__.lower()}_{Error(result.error_code).name.lower()}')
-        return result
+    def read_presence(self, stage):
+        self.read_evidence(InspectPositions, 'presence', Presence, stage=stage)
 
-    def inspect(self, view):
-        self.action(MoveTo, view_id=view)
-        result = self.control.service(self, Inspect, Inspect.Request(
-            task_id=self.task_id, stage=self.states[-1], view_id=view))
-        if not result.success:
-            raise TaskEnded(Outcome.HOLD, 'inspect_failed')
+    def read_evidence(self, kind, field, enum, **fields):
         with self.control.lock:
-            if view == 'top':
-                self.top = Presence(result.presence)
-            else:
-                self.side = Side(result.side)
+            self.control.guard(self)
+            setattr(self, field + '_l', enum.UNKNOWN)
+            setattr(self, field + '_r', enum.UNKNOWN)
+            setattr(self, field + '_evidence', 'UNVERIFIED')
             self.control.publish_status()
-        self.control.announce(self, INSPECTION[view].format(result.presence if view == 'top' else result.side))
-        return result
+        request = kind.Request(task_id=self.task_id, not_before=self.control.stamp(), **fields)
+        result = self.control.service(self, kind, request)
+        fresh = (time_ns(result.stamp) >= time_ns(request.not_before)
+                 and current_stamp(self.control, result.stamp, self.control.evidence_max_age))
+        left, right = (getattr(result, field + suffix) for suffix in ('_l', '_r'))
+        valid = result.success and result.error_code == Error.OK and fresh
+        left_valid, right_valid = (value in enum._value2member_map_ for value in (left, right))
+        evidence = 'UNVERIFIED'
+        if valid and result.origin == 'FAKE':
+            evidence = 'FAKE'
+        elif valid and result.origin == 'REAL' and result.verified:
+            evidence = 'REAL'
+        expected = 'FAKE' if self.control.mode == 'fake' else 'REAL'
+        with self.control.lock:
+            self.control.guard(self)
+            setattr(self, field + '_l', enum(left) if valid and left_valid else enum.UNKNOWN)
+            setattr(self, field + '_r', enum(right) if valid and right_valid else enum.UNKNOWN)
+            setattr(self, field + '_evidence', evidence)
+            if kind is InspectPositions:
+                self.control.vision_status = f'{evidence} OK' if evidence == expected else 'UNVERIFIED'
+            self.control.log(self.task_id, self.control.state,
+                             f'{field}: evidence={evidence}, code={result.error_code}, '
+                             f'reason={result.reason}')
+            self.control.publish_status()
+        if evidence != expected:
+            raise TaskEnded(Outcome.HOLD, field + '_evidence_unverified')
 
-    def locate(self, item):
-        result = self.control.service(self, Locate, Locate.Request(task_id=self.task_id, item_id=item))
-        if not result.success or not result.pose.valid:
-            raise TaskEnded(Outcome.HOLD, f'locate_{item}_failed')
-        return result.pose
 
-
-class InspectionTask(AssemblyTask):
-    """Collect external evidence without issuing any Robot Action."""
-
-    def __init__(self, control, task_id, source):
-        super().__init__(control, task_id, source)
-        self.presence_l = self.presence_r = Presence.UNKNOWN
-        self.fastening_l = self.fastening_r = Fastening.UNKNOWN
-        self.presence_evidence = self.fastening_evidence = 'UNVERIFIED'
+class InspectionTask(PositionTask):
+    """Collect external evidence without issuing Robot Actions."""
 
     def run(self):
         self.control.transition(self, State.INSPECT)
@@ -158,43 +119,8 @@ class InspectionTask(AssemblyTask):
             return Outcome.HOLD, 'position_fastening_unknown'
         return Outcome.PASS, 'positions_verified_seated'
 
-    def read_presence(self, stage):
-        self.read_evidence(InspectPositions, 'presence', Presence, stage=stage)
-
-    def read_evidence(self, kind, field, enum, **fields):
-        with self.control.lock:
-            self.control.guard(self)
-            setattr(self, field + '_l', enum.UNKNOWN)
-            setattr(self, field + '_r', enum.UNKNOWN)
-            setattr(self, field + '_evidence', 'UNVERIFIED')
-            self.control.publish_status()
-        request = kind.Request(task_id=self.task_id, not_before=self.control.stamp(), **fields)
-        result = self.control.service(self, kind, request)
-        fresh = (time_ns(result.stamp) >= time_ns(request.not_before)
-                 and current_stamp(self.control, result.stamp, self.control.evidence_max_age))
-        left, right = (getattr(result, field + suffix) for suffix in ('_l', '_r'))
-        valid = result.success and result.error_code == Error.OK and fresh
-        left_valid, right_valid = (value in enum._value2member_map_ for value in (left, right))
-        evidence = 'UNVERIFIED'
-        if valid and result.origin == 'FAKE':
-            evidence = 'FAKE'
-        elif valid and result.origin == 'REAL' and result.verified:
-            evidence = 'REAL'
-        with self.control.lock:
-            self.control.guard(self)
-            setattr(self, field + '_l', enum(left) if valid and left_valid else enum.UNKNOWN)
-            setattr(self, field + '_r', enum(right) if valid and right_valid else enum.UNKNOWN)
-            setattr(self, field + '_evidence', evidence)
-            self.control.log(self.task_id, self.control.state,
-                             f'{field}: evidence={evidence}, code={result.error_code}, '
-                             f'reason={result.reason}')
-            self.control.publish_status()
-        if evidence != 'REAL':
-            raise TaskEnded(Outcome.HOLD, field + '_evidence_unverified')
-
-
-class RealAssemblyTask(InspectionTask):
-    """Fasten taught L/R positions after live inspection of a prepared fixture."""
+class FasteningTask(PositionTask):
+    """Run the same L/R service and Action sequence with fake or physical providers."""
 
     def run(self):
         self.control.transition(self, State.INSPECT)
@@ -212,13 +138,12 @@ class RealAssemblyTask(InspectionTask):
 
         self.control.transition(self, State.FASTEN)
         self.recipe_id = 'finish'
-        for point in ('L', 'R'):
+        simulated = self.control.mode == 'fake'
+        for point in FASTEN_POINTS:
             self.control.log(self.task_id, State.FASTEN, f'{point}: finish requested')
-            # Real mode uses the taught point ID. The empty pose carries no fake geometry.
-            reply = self.action(Fasten, point_id=point, bolt_pose=TargetPose(), recipe_id=self.recipe_id)
-            self.control.wait_for(self, lambda: self.control.terminal_snapshot(self)
-                                  and self.control.physical_ready(), self.control.limits['robot_heartbeat'],
-                                  'robot_terminal_state_unconfirmed')
+            goal = Fasten.Goal(task_id=self.task_id, point_id=point,
+                               bolt_pose=TargetPose(), recipe_id=self.recipe_id)
+            reply = self.control.action(self, Fasten, goal)
             measured = (reply.success and reply.error_code == Error.OK and reply.tightening_valid
                         and isfinite(reply.peak_torque) and reply.peak_torque > 0
                         and isfinite(reply.turns) and reply.turns > 0 and bool(reply.episode_id))
@@ -227,8 +152,8 @@ class RealAssemblyTask(InspectionTask):
             with self.control.lock:
                 self.control.guard(self)
                 setattr(self, 'fastening_' + point.lower(), seat)
-                if seat == Fastening.SEATED:
-                    self.fastening_evidence = 'ACTION_TORQUE'
+                if seat != Fastening.UNKNOWN:
+                    self.fastening_evidence = 'FAKE_ACTION_RESULT' if simulated else 'ACTION_TORQUE'
                 self.tightening_valid = seat == Fastening.SEATED
                 self.control.log(self.task_id, State.FASTEN,
                                  f'{point}: {seat}, episode={reply.episode_id}, probe_valid={measured}')
@@ -237,12 +162,16 @@ class RealAssemblyTask(InspectionTask):
                 return Outcome.FAIL, f'{point.lower()}_not_seated'
             if seat != Fastening.SEATED:
                 return Outcome.HOLD, f'{point.lower()}_fastening_unconfirmed'
+            self.control.wait_for(self, lambda: self.control.terminal_snapshot(self)
+                                  and self.control.physical_ready(), self.control.limits['robot_heartbeat'],
+                                  'robot_terminal_state_unconfirmed')
 
         self.control.transition(self, State.VERIFY)
         self.read_presence(State.VERIFY)
         self.require_both_present()
         self.fastening = Fastening.SEATED
-        return Outcome.PASS, 'lr_present_after_verified_torque'
+        reason = 'lr_present_after_fake_fasten' if simulated else 'lr_present_after_verified_torque'
+        return Outcome.PASS, reason
 
     def require_both_present(self):
         positions = (self.presence_l, self.presence_r)

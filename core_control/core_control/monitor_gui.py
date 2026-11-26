@@ -18,9 +18,9 @@ BG, CARD, NAVY = '#e9f0f7', '#ffffff', '#17324d'
 MUTED, TRACK = '#48647f', '#e9f0f7'
 BLUE, TEAL, RED = '#245fab', '#087d83', '#b42d44'
 GREEN, AMBER = '#087052', '#855513'
-STAGES = tuple(state.value for state in State if state not in (State.STOPPED, State.RECOVER))
-OPTIONAL = {'FETCH', 'WAIT_WORKER', 'RECHECK'}
-AFTER_BRANCH = {'STOW', 'FASTEN', 'VERIFY'}
+STAGES = tuple(state.value for state in State if state not in (State.STOPPED, State.RECOVER, State.FETCH, State.STOW))
+OPTIONAL = {'WAIT_WORKER', 'RECHECK'}
+AFTER_BRANCH = {'FASTEN', 'VERIFY'}
 COLORS = {'PASS': GREEN, 'FAIL': RED, 'HOLD': AMBER, 'STOPPED': RED,
           'PRESENT': GREEN, 'MISSING': AMBER, 'PROTRUDING': AMBER,
           'NOT_PROTRUDING': GREEN, 'SEATED': GREEN, 'NOT_SEATED': RED, 'UNKNOWN': AMBER}
@@ -151,7 +151,7 @@ class MonitorWindow:
         self.devices = self.fields('장비 상태', tuple((key, key) for key in (
             'Control', 'Robot', 'Gripper', 'Camera', 'Vision', 'Voice', 'LLM', 'DB')), compact=True)
         self.inspection = self.fields('검사 및 체결 결과', (
-            ('상단 검사', 'top'), ('측면 검사', 'side'), ('체결 판정', 'fastening'),
+            ('Left(L) 존재 / 체결', 'top'), ('Right(R) 존재 / 체결', 'side'), ('판정 근거', 'fastening'),
             ('최종 판정', 'final'), ('HOLD / FAIL 사유', 'reason'),
             ('최종 토크 / 회전', 'measurement'), ('레시피', 'recipe')))
 
@@ -431,22 +431,15 @@ class MonitorWindow:
             prefix = 'MOCK · ' if result.mode == 'fake' else ''
             measurements = f'{prefix}{result.peak_torque:.2f} N·m / {result.turns:.2f}'
         record = control or result
-        position_mode = self.display_mode in ('INSPECTION', 'REAL')
-        inspection_values = [getattr(record, key, '') or 'N/A'
-                             for key in ('top', 'side', 'fastening')]
-        if position_mode:
-            inspection_values = [
-                f'{getattr(record, "presence_" + point, "") or "N/A"} / '
-                f'{getattr(record, "fastening_" + point, "") or "N/A"}'
-                for point in ('l', 'r')
-            ]
-            inspection_values.append(
-                f'{getattr(record, "presence_evidence", "") or "UNVERIFIED"} / '
-                f'{getattr(record, "fastening_evidence", "") or "UNVERIFIED"}')
-        captions = (('Left(L) 존재 / 체결', 'Right(R) 존재 / 체결', '판정 근거') if position_mode
-                    else ('상단 검사', '측면 검사', '체결 판정'))
-        for key, caption, value in zip(('top', 'side', 'fastening'), captions, inspection_values):
-            self.captions[key].configure(text=caption)
+        inspection_values = [
+            f'{getattr(record, "presence_" + point, "") or "N/A"} / '
+            f'{getattr(record, "fastening_" + point, "") or "N/A"}'
+            for point in ('l', 'r')
+        ]
+        inspection_values.append(
+            f'{getattr(record, "presence_evidence", "") or "UNVERIFIED"} / '
+            f'{getattr(record, "fastening_evidence", "") or "UNVERIFIED"}')
+        for key, value in zip(('top', 'side', 'fastening'), inspection_values):
             self.set_value(key, value)
         for key, value in (
             ('state', state), ('task', displayed_task or 'N/A'),

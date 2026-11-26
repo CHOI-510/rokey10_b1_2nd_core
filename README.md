@@ -1,6 +1,6 @@
 # rokey10_b1_2nd_core
 
-협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복구, JSONL 및 Episode 기록을 실행합니다. Fake 통합 시나리오 10개와 관리자 GUI **CORE MONITOR**의 조작·상태 표시를 검증했습니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다. 외부 결과를 연결하는 팀원은 [L/R 검사 전용 실행](#lr-외부-검사-결과-통합)을 사용합니다.
+협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복구, JSONL 및 Episode 기록을 실행합니다. Fake와 실물 모드는 동일한 L/R 관제 FSM과 ROS 메시지로 **CORE MONITOR**의 상태와 결과를 갱신합니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다. 외부 결과를 연결하는 팀원은 [L/R 검사 전용 실행](#lr-외부-검사-결과-통합)을 사용합니다.
 
 실물 통합에는 두산 M0609·RG2 어댑터, 카메라·힘 센서 발행기, YOLO 연동, 독립 그리퍼 상태와 현장 안전 검증이 남아 있습니다. [로드맵](docs/ROADMAP.md)
 
@@ -9,14 +9,14 @@
 | 패키지 | 담당 |
 |---|---|
 | `core_bringup` | 시스템 Launch와 파라미터 |
-| `core_common` | 공통 타입·오류·기록·영상 전송 도구 |
+| `core_common` | 공통 타입·오류·기록·ROS 이름 정의 |
 | `core_control` | FSM, CLI, CORE MONITOR |
 | `core_interfaces` | ROS Action·Service·Message |
 | `core_language` | 음성·LLM 연동 계약 |
 | `core_robot` | 로봇 Action, 체결 구현과 단독 진단 명령 |
 | `core_vision` | Fake 검사와 L/R 존재 검사 |
 
-실행 모드는 기본 Fake 조립과 외부 L/R 검사입니다. 실물 체결 시험의 공용 구현과 `fasten_test`·`slot_view` 진입점은 `core_robot`에 있습니다. 장비 연결과 두 실행 경로의 적용 범위는 [실물 체결 문서](docs/REAL_FASTEN.md)를 참고하세요.
+실행 모드는 Fake L/R 체결, 실물 L/R 체결, 외부 L/R 검사입니다. 실물 체결 시험의 공용 구현과 `fasten_test`·`slot_view` 진입점은 `core_robot`에 있습니다. 장비 연결과 두 실행 경로의 적용 범위는 [실물 체결 문서](docs/REAL_FASTEN.md)를 참고하세요.
 
 ## 설치 및 빌드
 
@@ -56,7 +56,15 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ros2 launch core_bringup system.launch.py mode:=fake
 ```
 
-기본 시나리오는 `missing`입니다. Launch는 관제·Fake Robot·Fake Vision을 띄우고 GUI는 기본값으로 꺼집니다. 인자와 시나리오 목록은 `ros2 launch core_bringup system.launch.py --show-args`로 확인할 수 있습니다.
+기본 시나리오는 `missing`입니다. Launch는 관제, Fake Robot, Fake Vision, CORE MONITOR를 띄웁니다. 화면 없이 시험할 때는 `gui:=false`를 지정합니다. Fake와 실물은 `/integration/inspect_positions`와 `/fasten`을 동일하게 호출하며, Fake 공급자가 검사 결과와 체결 Action 결과를 생성합니다. 관제는 서비스 검색, 응답, Action 결과를 기다립니다.
+
+| `scenario` | Fake 공급자 응답 |
+|---|---|
+| `missing` | 첫 검사 L 누락, R 존재. WORKER DONE 후 둘 다 존재 |
+| `partial`, `seated` | 두 위치 존재. 이전 시나리오 이름은 초기 존재 판정만 지정하며 같은 L/R 체결 경로로 진행 |
+| `vision_unknown` | L 판정 불가로 HOLD |
+| `fasten_failure` | L 성공, R 미체결로 FAIL |
+| `sensor_mismatch` | 체결 후 확인에서 R 누락으로 HOLD |
 
 다른 터미널에서 상태를 보거나 아래 CLI 명령 중 필요한 명령을 실행합니다.
 
@@ -88,7 +96,7 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 | 버튼 | CLI | 동작 |
 |---|---|---|
 | CHECK | `check` | READY에서 이동 허가를 확인한 뒤 새 작업을 시작합니다. |
-| WORKER DONE | `done` | WAIT_WORKER의 현재 작업을 이어갑니다. 완료 접수 후 3초 대기와 이동 허가 확인을 거쳐 재검사합니다. |
+| WORKER DONE | `done` | WAIT_WORKER의 현재 작업을 이어갑니다. 재검사를 실행하고 L/R 모두 존재해야 체결로 진행합니다. |
 | RESUME | `resume` | STOPPED 또는 RECOVER에서 물리 조건을 확인한 뒤 명시적으로 복귀를 요청합니다. READY가 표시되면 CHECK로 새 작업을 시작할 수 있습니다. |
 | CANCEL | `cancel` | 진행 중인 작업의 취소를 요청합니다. |
 | STOP | `stop` | GUI는 관제와 Robot에 독립적으로 소프트웨어 정지를 요청합니다. CLI는 관제 경로를 호출합니다. 물리적 비상정지 장치가 필요합니다. |
@@ -96,9 +104,9 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 ### 볼트 누락 예제
 
 1. 위 통합 Launch를 실행하고 CORE MONITOR에 READY가 표시될 때까지 기다립니다.
-2. CHECK를 눌러 INSPECT와 FETCH를 거쳐 WAIT_WORKER에 도달했는지 확인합니다.
+2. CHECK를 누르면 검사 서비스 응답 뒤 WAIT_WORKER에 도달합니다. GUI는 L 누락, R 존재를 표시합니다.
 3. WORKER DONE을 누릅니다. 재검사와 체결을 마치면 화면에 PASS가 표시되고 관제는 READY로 돌아갑니다.
-4. 결과 카드와 이벤트 로그에서 같은 작업의 상단 판정, 체결 판정, 최종 결과를 확인합니다.
+4. 결과 카드와 이벤트 로그에서 L/R별 존재·체결과 `FAKE / FAKE_ACTION_RESULT` 근거를 확인합니다. 검사·체결 공급자가 없거나 응답 기한을 넘기면 HOLD가 표시됩니다.
 
 Fake 실행은 GUI 영상 구독을 기본으로 끕니다. 미리보기를 시험할 때는 `preview_enabled:=true`를 사용합니다. 실물에서는 손목 미리보기, Vision 1과 체결이 `core_common.topics.CAMERA_COLOR`의 원본 영상을 기본으로 구독합니다.
 

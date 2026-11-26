@@ -102,17 +102,17 @@ Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용�
 
 영상과 체결 센서의 구독은 Best Effort, Keep Last 1을 사용합니다. 카메라 토픽이 비어 있으면 OFF, 유효한 프레임이 오면 LIVE, 유효한 프레임을 일정 시간 받지 못하면 NO SIGNAL로 표시합니다. GUI 노드의 `camera_timeout` 파라미터 기본값은 2.0초입니다. `rgb8`, `bgr8`, `rgba8`, `bgra8`, `mono8`, `8UC1`을 지원하며, 발행 측이 영상에 그린 YOLO 박스도 그대로 표시할 수 있습니다.
 
-체결 입력은 공구 좌표계의 Z축으로 정렬한 Fz(N)와 Mz(N·m)를 사용합니다. 발행 측은 관제와 같은 ROS 시간 기준으로 `header.stamp`를 채웁니다. GUI는 최신 관제 상태가 FASTEN인 동안 체결 단계 시작 시각 이후의 샘플을 수집합니다. 그래프에는 최근 400개 샘플을 그리며, 최대값은 수신한 샘플에서 구한 각 축의 최대 절댓값입니다. 체결 시간은 첫·마지막 샘플 사이의 관측 구간입니다. 샘플이 없으면 N/A가 표시됩니다. GUI의 `mode:=fake`에서는 수신값에 MOCK을 붙이며, 이 표시는 GUI 모드 설정에 따릅니다. 기본 Fake Launch는 영상이나 Wrench를 발행하지 않습니다.
+체결 입력은 공구 좌표계의 Z축으로 정렬한 Fz(N)와 Mz(N·m)를 사용합니다. 발행 측은 관제와 같은 ROS 시간 기준으로 `header.stamp`를 채웁니다. GUI는 최신 관제 상태가 FASTEN인 동안 체결 단계 시작 시각 이후의 샘플을 수집합니다. 그래프에는 최근 400개 샘플을 그리며, 최대값은 수신한 샘플에서 구한 각 축의 최대 절댓값입니다. 체결 시간은 첫·마지막 샘플 사이의 관측 구간입니다. 샘플이 없으면 N/A가 표시됩니다. GUI의 `mode:=fake`에서는 수신값에 MOCK을 붙이며, 이 표시는 GUI 모드 설정에 따릅니다. 기본 Fake Launch는 GUI를 실행하며 영상·Wrench는 선택 입력입니다.
 
 영상 연결, 설정과 측정 방법은 [영상 파이프라인](VIDEO_PIPELINE.md)에 있습니다.
 
 ## L/R 최소 통합 계약
 
-`mode:=inspection`은 외부 관측 결과를 모으는 경로입니다. CHECK → INSPECT → WAIT_WORKER → 작업자 DONE → RECHECK → VERIFY → REPORT 순서입니다. Robot Action과 자동 FETCH·STOW·FASTEN은 이 경로의 실행 대상에서 제외됩니다. 기존 `mode:=fake`는 단일 볼트 `/inspect` 및 전체 조립 공정을 사용합니다.
+`mode:=inspection`은 외부 관측 결과를 모으는 경로입니다. CHECK → INSPECT → WAIT_WORKER → 작업자 DONE → RECHECK → VERIFY → REPORT 순서입니다. Robot Action과 자동 FETCH·STOW·FASTEN은 이 경로의 실행 대상에서 제외됩니다. `mode:=fake`와 `mode:=real`의 관제는 같은 `/integration/inspect_positions`와 `/fasten`을 호출하며 각각 합성 공급자와 실물 공급자를 사용합니다.
 
 | 제공 담당 | 서비스와 타입 | 요청 | 응답 |
 |---|---|---|---|
-| 비전 1 | `/integration/inspect_positions` · `core_interfaces/srv/InspectPositions` | `task_id`, `stage` (INSPECT 또는 RECHECK), `not_before` | `presence_l`, `presence_r` 및 공통 증거 필드 |
+| 비전 1 | `/integration/inspect_positions` · `core_interfaces/srv/InspectPositions` | `task_id`, `stage` (INSPECT, RECHECK 또는 VERIFY), `not_before` | `presence_l`, `presence_r` 및 공통 증거 필드 |
 | 비전 2 | `/integration/read_fastening` · `core_interfaces/srv/ReadFastening` | `task_id`, `not_before` | `fastening_l`, `fastening_r` 및 공통 증거 필드 |
 
 - 비전 1은 자체 영상 처리 함수의 결과를 L/R 두 필드에 매핑합니다. 각 위치는 `PRESENT`, `MISSING`, `UNKNOWN` 중 하나입니다. `L`은 Left(왼쪽 볼트), `R`은 Right(오른쪽 볼트)입니다.
@@ -184,3 +184,8 @@ ros2 topic echo /task_result --qos-durability transient_local
 `mode:=real`에서 관제는 `InspectPositions`의 `INSPECT`, `RECHECK`, `VERIFY`를 사용합니다. `VERIFY`는 실물 체결 후 시각보다 새로운 영상으로 L/R 존재를 확인합니다. 실물 `Fasten`은 `point_id=L|R`, `recipe_id=finish`, `bolt_pose.valid=false`를 사용합니다. 로봇 노드는 스테이션 티칭 위치를 사용하며 기본 매핑은 L=2, R=1입니다.
 
 `TaskResult.mode=real`이고 `fastening_evidence=ACTION_TORQUE`이면 위치별 체결 판정은 Fasten Action의 계측 근거를 사용합니다. `episode_id` 및 단일 토크·회전수 필드는 최근 Action의 값입니다. 이전 위치의 Episode도 같은 `task_id`와 각 `point_id`로 추적할 수 있습니다. 이 모드의 `RobotStatus.stop_confirmed`는 물리 확인이 연동될 때까지 false입니다.
+
+
+### Fake 관제 검증 계약
+
+Fake Vision은 같은 `InspectPositions` 서비스에서 신선한 L/R 판정과 `origin=FAKE`를 반환합니다. Fake 관제는 이 출처의 응답을 사용하고, 실물·외부 검사 관제는 `origin=REAL`, `verified=true` 응답을 사용합니다. Fake Robot은 실물과 같은 L/R 위치 ID와 `finish` Goal을 받아 피드백과 결과, 마지막 완료 Goal ID를 발행합니다. `TaskResult.mode=fake`, `presence_evidence=FAKE`, `fastening_evidence=FAKE_ACTION_RESULT`로 결과 출처를 구분합니다.

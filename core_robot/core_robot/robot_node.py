@@ -12,7 +12,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from core_common.ros_context import ros_context
-from core_common.config import FAKE_FRAME, SCENARIOS, data_directory
+from core_common.config import FAKE_FRAME, FASTEN_POINTS, SCENARIOS, data_directory
 from core_common.errors import ErrorCode as Error
 from core_common.gripper_api import FakeGripper
 from core_common.reporter import Journal, feedback
@@ -150,7 +150,9 @@ class RobotNode(Node):
             if (self.busy or not self.motion_ready()
                     or (self.require_heartbeat and (not self.control_live()
                         or self.control_state in (State.STOPPED, State.RECOVER)))
-                    or (self.real_cycle and (not goal.task_id or goal.task_id != self.control_task_id))):
+                    or (self.require_heartbeat and kind is Fasten and
+                        (self.real_cycle or goal.point_id in FASTEN_POINTS)
+                        and (not goal.task_id or goal.task_id != self.control_task_id))):
                 return GoalResponse.REJECT
             self.busy = True
             self.current_action = kind.__name__
@@ -384,7 +386,10 @@ class RobotNode(Node):
             if not success:
                 return Error.FAILED
         elif kind is Fasten:
-            if not (goal.point_id and valid_pose(goal.bolt_pose) and goal.recipe_id in fasten.RECIPES):
+            if goal.point_id in FASTEN_POINTS:
+                if goal.bolt_pose.valid or goal.recipe_id != 'finish':
+                    return Error.INVALID
+            elif not (goal.point_id and valid_pose(goal.bolt_pose) and goal.recipe_id in fasten.RECIPES):
                 return Error.INVALID
             result.state, result.peak_torque, result.turns = fasten.run(goal, self.scenario)
             result.tightening_valid = True

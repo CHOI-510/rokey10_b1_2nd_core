@@ -16,23 +16,16 @@ from core_common.announcements import result_text
 from core_common.config import data_directory
 from core_common.errors import ErrorCode as Error
 from core_common.reporter import Journal
-from core_common.robot_setup import require_fake
 from core_common.ros_context import ros_context
 from core_common.status_qos import SNAPSHOT_QOS, current_stamp
 from core_common.types import Outcome, State
-from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
+from core_interfaces.action import Fasten
 from core_interfaces.msg import Announcement, ControlStatus, LogEvent, RobotStatus, TaskResult
-from core_interfaces.srv import EmergencyStop, Inspect, InspectPositions, JobCommand, Locate, ReadFastening
+from core_interfaces.srv import EmergencyStop, InspectPositions, JobCommand, ReadFastening
 
-from .task_assembly import AssemblyTask, InspectionTask, RealAssemblyTask, TaskEnded, position_fields
+from .task_assembly import FasteningTask, InspectionTask, TaskEnded, position_fields
 
 
-ACTIONS = {
-    MoveTo: (topics.MOVE_TO, 'move_to'),
-    Fetch: (topics.FETCH, 'fetch'),
-    Stow: (topics.STOW, 'stow'),
-    Fasten: (topics.FASTEN, 'fasten'),
-}
 SOURCES = {'gui', 'cli', 'voice'}
 TERMINAL = {GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_CANCELED}
 
@@ -43,10 +36,9 @@ class Control(Node):
         self.mode = self.declare_parameter('mode', 'fake').value
         self.inspection_only = self.mode == 'inspection'
         self.real_cycle = self.mode == 'real'
-        self.task_type = {'fake': AssemblyTask, 'inspection': InspectionTask,
-                          'real': RealAssemblyTask}.get(self.mode)
-        if self.task_type is None:
-            require_fake(self.mode)
+        self.task_type = InspectionTask if self.inspection_only else FasteningTask
+        if not (self.inspection_only or self.real_cycle or self.mode == 'fake'):
+            raise ValueError(f'Unknown control mode: {self.mode}')
         self.evidence_max_age = self.declare_parameter('evidence_max_age', 3.0).value
         if not isfinite(self.evidence_max_age) or self.evidence_max_age <= 0:
             raise ValueError('evidence_max_age must be positive')
@@ -96,11 +88,9 @@ class Control(Node):
                         (ReadFastening, topics.READ_FASTENING))
             self.actions = {}
         else:
-            vision = ((InspectPositions, topics.INSPECT_POSITIONS),) if self.real_cycle else (
-                (Inspect, topics.INSPECT), (Locate, topics.LOCATE))
-            services = (*vision, (EmergencyStop, topics.ROBOT_EMERGENCY_STOP))
-            actions = {Fasten: ACTIONS[Fasten]} if self.real_cycle else ACTIONS
-            self.actions = {kind: ActionClient(self, kind, name) for kind, name in actions}
+            services = ((InspectPositions, topics.INSPECT_POSITIONS),
+                        (EmergencyStop, topics.ROBOT_EMERGENCY_STOP))
+            self.actions = {Fasten: ActionClient(self, Fasten, topics.FASTEN)}
             self.create_subscription(RobotStatus, topics.ROBOT_STATUS, self.receive_status, 10)
         self.service_clients = {kind: self.create_client(kind, name) for kind, name in services}
         self.create_service(JobCommand, topics.JOB_COMMAND, self.command)
@@ -279,11 +269,10 @@ class Control(Node):
                 if not self.clearance() or not self.physical_ready():
                     self.state = State.RECOVER
                     self.recovery = 'physical_state_unconfirmed'
-            vision_services = (InspectPositions,) if self.mode != 'fake' else (Inspect, Locate)
-            if not all(self.service_clients[kind].service_is_ready() for kind in vision_services):
+            if not self.service_clients[InspectPositions].service_is_ready():
                 self.vision_status = 'UNAVAILABLE'
-            elif self.vision_status == 'UNAVAILABLE':
-                self.vision_status = 'UNVERIFIED'
+            elif self.vision_status in ('UNAVAILABLE', 'UNVERIFIED'):
+                self.vision_status = 'SERVICE READY'
             self.publish_status()
 
     def tick_stop(self):
@@ -450,16 +439,13 @@ class Control(Node):
         future = None
         try:
             self.wait_for(task, client.service_is_ready, timeout, prefix + '_service_unavailable')
-            future = client.call_async(request)
-            self.wait_for(task, future.done, timeout, prefix + '_service_timeout')
-            reply = future.result()
             if is_vision:
                 with self.lock:
-                    success_status = 'EXTERNAL REPLY' if self.mode != 'fake' else 'FAKE OK'
-                    self.vision_status = (success_status if reply.success else
-                                      'NOT_IMPLEMENTED' if reply.error_code == Error.NOT_IMPLEMENTED
-                                      else 'ERROR')
-            return reply
+                    self.vision_status = 'WAITING REPLY'
+                    self.publish_status()
+            future = client.call_async(request)
+            self.wait_for(task, future.done, timeout, prefix + '_service_timeout')
+            return future.result()
         except TaskEnded as exc:
             if exc.reason.startswith('vision_service_'):
                 with self.lock:
@@ -496,7 +482,7 @@ class Control(Node):
             task.last_goal_id = bytes(handle.goal_id.uuid).hex()
             result = handle.get_result_async()
             progress['advanced'] = progress['received'] = monotonic()
-            self.wait_for(task, result.done, self.limits[ACTIONS[kind][1]], 'robot_action_timeout', progress)
+            self.wait_for(task, result.done, self.limits['fasten'], 'robot_action_timeout', progress)
             reply = result.result()
             if kind is Fasten:
                 task.capture_fastening(reply.result)
@@ -509,7 +495,7 @@ class Control(Node):
                 raise TaskEnded(Outcome.HOLD, self.stop_reason)
             if reply.status == GoalStatus.STATUS_CANCELED:
                 raise TaskEnded(Outcome.HOLD, 'robot_action_cancelled')
-            if self.real_cycle and reply.result.success and reply.status != GoalStatus.STATUS_SUCCEEDED:
+            if reply.result.success and reply.status != GoalStatus.STATUS_SUCCEEDED:
                 raise TaskEnded(Outcome.HOLD, 'robot_action_result_inconsistent')
             return reply.result
         except TaskEnded:

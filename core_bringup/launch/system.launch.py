@@ -33,7 +33,8 @@ def generate_launch_description():
         DeclareLaunchArgument('data_dir', default_value='data'),
         DeclareLaunchArgument('voice', default_value='false'),
         DeclareLaunchArgument('llm', default_value='false'),
-        DeclareLaunchArgument('gui', default_value='false'),
+        DeclareLaunchArgument('gui', default_value=PythonExpression([
+            "'true' if '", mode, "' == 'fake' else 'false'"])),
         DeclareLaunchArgument('preview_enabled', default_value=PythonExpression([
             "'false' if '", mode, "' == 'fake' else 'true'"])),
         DeclareLaunchArgument('wrist_image_type', default_value='raw', choices=['raw', 'compressed']),

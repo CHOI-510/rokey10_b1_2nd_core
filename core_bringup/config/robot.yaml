@@ -1,5 +1,5 @@
 robot_node:
   ros__parameters:
-    action_seconds: 0.15
+    action_seconds: 0.9
     fake_motion_clear: true
     control_heartbeat_timeout: 1.0

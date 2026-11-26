@@ -2,7 +2,7 @@
 
 ## Fake 조립
 
-- Robot Node를 기동해 Action을 실행하는 Launch 경로는 `mode:=fake`입니다. `fake_motion_clear`은 시뮬레이션용 이동 허가입니다. 작업자 완료 신호 후 3초가 지나도 최신 이동 허가를 별도로 확인합니다.
+- Robot Node는 `mode:=fake`와 `mode:=real`에서 기동합니다. `fake_motion_clear`은 시뮬레이션용 이동 허가입니다. L/R 관제는 작업자 완료 후 재검사하고 각 Action 전에 이동 허가를 확인합니다.
 - Robot Node는 공통 Action 실행 슬롯을 사용합니다. Fake Action 실행 중에도 별도 실행 스레드에서 STOP과 Watchdog을 처리할 수 있습니다. Robot은 상태 시각과 관제 인스턴스 ID를 확인합니다. 동작 중 관제 상태 유실 또는 인스턴스 변경 시 정지를 래치합니다.
 - GUI는 관제와 Robot에 독립적으로 STOP을 요청합니다. 서비스 성공은 래치 접수입니다. Fake Robot이 Action을 끝내고 유휴 상태를 보고하면 정지 확인으로 표시합니다. 최초 정지 원인은 래치와 TaskResult, JSONL 및 이벤트에 연결하고 추가 오류는 별도 기록합니다.
 - Goal 수락·종료가 불명확하면 STOPPED를 유지하고, 종결 결과가 확인될 때까지 RESUME을 허용하지 않습니다. STOP 재요청은 같은 ID로 제한된 횟수만 시도합니다. RESUME 응답 또는 후속 상태가 불명확하면 다시 정지 요청을 보내고 관리자 조작을 기다립니다.
