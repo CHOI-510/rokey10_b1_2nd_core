@@ -6,3 +6,11 @@ string fastening
 string side
 string episode_id
 string[] states
+string top
+string mode
+string source
+string stop_reason
+bool tightening_valid
+float64 peak_torque
+float64 turns
+string recipe_id

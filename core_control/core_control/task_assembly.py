@@ -1,5 +1,6 @@
 from time import monotonic
 
+from core_common.announcements import FETCH_COMPLETE, HANDOFF_COMPLETE, INSPECTION
 from core_common.errors import ErrorCode as Error
 from core_common.types import Fastening, Outcome, Presence, Side, State
 from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
@@ -14,15 +15,22 @@ class TaskEnded(Exception):
 
 
 class AssemblyTask:
-    def __init__(self, control, task_id):
+    def __init__(self, control, task_id, source):
         self.control = control
         self.task_id = task_id
+        self.source = source
+        self.top = Presence.UNKNOWN
+        self.outcome = ''
+        self.recipe_id = ''
+        self.tightening_valid = False
+        self.peak_torque = self.turns = 0.0
         self.states = [State.READY]
         self.done = False
         self.cancelled = False
         self.fastening = Fastening.UNKNOWN
         self.side = Side.UNKNOWN
         self.episode_id = ''
+        self.last_goal_id = ''
 
     def run(self):
         self.control.transition(self, State.INSPECT)
@@ -32,9 +40,10 @@ class AssemblyTask:
             for item in ('bolt', 'driver'):
                 self.action(Fetch, item_id=item, pick_pose=self.locate(item), dest_id='handoff')
             self.control.transition(self, State.WAIT_WORKER)
+            self.control.announce(self, FETCH_COMPLETE)
             self.control.wait_for(self, lambda: self.done, self.control.worker_timeout,
                                   'worker_timeout')
-            self.control.announce(self, '작업 완료를 확인했습니다. 이동 허가를 확인합니다.')
+            self.control.announce(self, HANDOFF_COMPLETE)
             until = monotonic() + 3
             self.control.wait_for(self, lambda: monotonic() >= until, 4, 'handoff_delay_timeout')
             self.control.require_clearance()
@@ -50,11 +59,8 @@ class AssemblyTask:
         self.control.transition(self, State.STOW)
         self.action(Stow, item_id='driver', grasp_pose=self.locate('driver'), holder_id='driver_holder')
         self.control.transition(self, State.FASTEN)
-        recipe = 'confirm' if self.side == Side.NOT_PROTRUDING else 'finish'
-        result = self.action(Fasten, point_id='assembly_bolt', bolt_pose=top.bolt_pose, recipe_id=recipe)
-        if result.state in Fastening._value2member_map_:
-            self.fastening = Fastening(result.state)
-        self.episode_id = result.episode_id
+        self.recipe_id = 'confirm' if self.side == Side.NOT_PROTRUDING else 'finish'
+        result = self.action(Fasten, point_id='assembly_bolt', bolt_pose=top.bolt_pose, recipe_id=self.recipe_id)
         if self.fastening == Fastening.NOT_SEATED:
             raise TaskEnded(Outcome.FAIL, 'fastening_failed')
         if not result.success:
@@ -66,6 +72,14 @@ class AssemblyTask:
         if self.side != Side.NOT_PROTRUDING:
             raise TaskEnded(Outcome.HOLD, 'verification_sensor_mismatch_or_unknown')
         return Outcome.PASS, 'verified_seated'
+
+    def capture_fastening(self, result):
+        with self.control.lock:
+            if result.state in Fastening._value2member_map_:
+                self.fastening = Fastening(result.state)
+            self.episode_id = result.episode_id
+            self.tightening_valid = result.tightening_valid
+            self.peak_torque, self.turns = result.peak_torque, result.turns
 
     def action(self, kind, **fields):
         result = self.control.action(self, kind, kind.Goal(task_id=self.task_id, **fields))
@@ -79,6 +93,13 @@ class AssemblyTask:
             task_id=self.task_id, stage=self.states[-1], view_id=view))
         if not result.success:
             raise TaskEnded(Outcome.HOLD, 'inspect_failed')
+        with self.control.lock:
+            if view == 'top':
+                self.top = Presence(result.presence)
+            else:
+                self.side = Side(result.side)
+            self.control.publish_status()
+        self.control.announce(self, INSPECTION[view].format(result.presence if view == 'top' else result.side))
         return result
 
     def locate(self, item):

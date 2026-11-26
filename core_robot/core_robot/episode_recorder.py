@@ -14,8 +14,8 @@ COLUMNS = (
 
 
 class EpisodeRecorder:
-    def __init__(self, root: Path, task_id, stamp_ns, frame_id, mode):
-        self.episode_id = f'EP{uuid4().hex}'
+    def __init__(self, root: Path, task_id, stamp_ns, frame_id, mode, *, episode_id=None):
+        self.episode_id = episode_id or f'EP{uuid4().hex}'
         self.path = root / self.episode_id
         self.path.mkdir(parents=True)
         self._write('metadata.json', dict(

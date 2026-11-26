@@ -9,6 +9,8 @@ from core_interfaces.srv import ParseCommand, Summarize
 
 def unavailable(request, response):
     response.error_code = ErrorCode.NOT_IMPLEMENTED
+    if isinstance(response, ParseCommand.Response):
+        response.needs_confirmation = True
     return response
 
 

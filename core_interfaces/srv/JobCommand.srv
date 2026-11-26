@@ -1,4 +1,5 @@
 string command
+string source
 ---
 bool accepted
 string state

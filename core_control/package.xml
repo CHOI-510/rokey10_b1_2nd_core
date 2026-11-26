@@ -11,5 +11,9 @@
   <exec_depend>core_common</exec_depend>
   <exec_depend>core_interfaces</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>python3-tk</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

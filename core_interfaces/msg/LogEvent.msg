@@ -3,3 +3,5 @@ string task_id
 string stage
 string log_level
 string log_msg
+string node
+string source

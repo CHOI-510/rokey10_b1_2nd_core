@@ -1,3 +1,16 @@
 builtin_interfaces/Time stamp
 string task_id
 string state
+string mode
+string control_id
+string vision_status
+string recovery
+string stop_reason
+string top
+string side
+string fastening
+string outcome
+string last_reason
+string[] allowed_commands
+string[] states
+string last_task_id

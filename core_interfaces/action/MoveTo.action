@@ -3,8 +3,10 @@ string view_id
 ---
 bool success
 int32 error_code
+string stop_reason
 core_interfaces/TargetPose current_pose
 ---
 string stage
 string log_level
 string log_msg
+uint32 progress

@@ -26,6 +26,7 @@ class Probe(Node):
     def __init__(self):
         super().__init__('fake_integration_probe')
         self.status = None
+        self.snapshot = None
         self.robot_status = None
         self.results = []
         self.create_subscription(ControlStatus, '/control_status', self.on_status, 10)
@@ -36,6 +37,7 @@ class Probe(Node):
 
     def on_status(self, msg):
         self.status = msg.state
+        self.snapshot = msg
 
     def on_robot_status(self, msg):
         self.robot_status = msg
@@ -46,14 +48,15 @@ class Probe(Node):
             assert monotonic() < deadline, f'Timed out waiting for {description}, state={self.status}'
             rclpy.spin_once(self, timeout_sec=0.05)
 
-    def command(self, command, accepted=True):
+    def command(self, command, accepted=True, source='cli'):
         if command == 'stop':
-            future = self.stop.call_async(EmergencyStop.Request(command='stop'))
+            future = self.stop.call_async(EmergencyStop.Request(command='stop', source=source))
         else:
-            future = self.job.call_async(JobCommand.Request(command=command))
+            future = self.job.call_async(JobCommand.Request(command=command, source=source))
         self.wait(future.done, command, 5)
         reply = future.result()
-        assert (reply.success if command == 'stop' else reply.accepted) == accepted, reply
+        if accepted is not None:
+            assert (reply.success if command == 'stop' else reply.accepted) == accepted, reply
         return reply
 
 
@@ -90,16 +93,26 @@ def run_case(label, scenario, outcome, reason, states, recipe=None,
                 probe.wait(lambda: len(probe.results) == 1, 'task result')
                 result = probe.results[0]
                 assert (result.outcome, result.reason, list(result.states)) == (outcome, reason, states), result
+                probe.wait(lambda: (data / 'task_results.jsonl').exists()
+                           and (data / 'task_results.jsonl').read_text().endswith('\n'),
+                           'asynchronous result journal')
                 persisted, = read_jsonl(data / 'task_results.jsonl')
                 assert persisted['task_id'] == result.task_id and persisted['outcome'] == outcome
+                assert persisted['stop_reason'] == result.stop_reason
+                assert persisted['source'] == result.source == 'cli'
                 events = read_jsonl(data / 'event_logs.jsonl')
                 assert any(event['task_id'] == result.task_id for event in events)
                 if recipe:
                     episode = data / 'episodes' / result.episode_id
+                    probe.wait(lambda: (episode / 'result.json').exists(), 'episode flush')
                     metadata = json.loads((episode / 'metadata.json').read_text())
                     assert metadata['task_id'] == result.task_id and metadata['mode'] == 'fake'
                     episode_result = json.loads((episode / 'result.json').read_text())
                     assert episode_result['success'] == (outcome != 'FAIL'), episode_result
+                    assert result.tightening_valid
+                    assert result.recipe_id == recipe
+                    assert (result.peak_torque, result.turns) == (
+                        episode_result['peak_torque_nm'], episode_result['turns'])
                     assert recipe in (episode / 'trajectory.csv').read_text()
                 else:
                     assert not result.episode_id
@@ -109,7 +122,12 @@ def run_case(label, scenario, outcome, reason, states, recipe=None,
                     for _ in range(3):
                         probe.command('check', accepted=False)
                         assert probe.status == 'STOPPED'
-                    probe.wait(lambda: probe.command('resume', accepted=True), 'explicit resume')
+                    def resume_confirmed():
+                        reply = probe.command('resume', accepted=None)
+                        assert reply.accepted or reply.reason == 'awaiting_robot_stop_confirmation', reply
+                        return reply.accepted
+
+                    probe.wait(resume_confirmed, 'explicit resume')
                 probe.wait(lambda: probe.status == 'READY', 'return to ready')
                 if interruption == 'stop':
                     assert len(probe.results) == 1
@@ -140,7 +158,7 @@ def main():
          [*PRESENT[:4], 'REPORT'], 'finish'),
         ('sensor mismatch', 'sensor_mismatch', 'HOLD', 'verification_sensor_mismatch_or_unknown',
          PRESENT, 'finish'),
-        ('operator stop', 'missing', 'HOLD', 'stopped', [*FULL[:4], 'STOPPED'], None, 'stop'),
+        ('operator stop', 'missing', 'HOLD', 'operator_stop', [*FULL[:4], 'STOPPED'], None, 'stop'),
         ('DB offline', 'partial', 'PASS', 'verified_seated', PRESENT, 'finish', None, 'database_node'),
         ('LLM offline', 'partial', 'PASS', 'verified_seated', PRESENT, 'finish', None, 'llm_node'),
         ('operator cancel', 'missing', 'HOLD', 'cancelled', [*FULL[:4], 'REPORT'], None, 'cancel'),

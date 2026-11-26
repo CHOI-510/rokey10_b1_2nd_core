@@ -1,3 +1,4 @@
+from math import isfinite
 from threading import Event, RLock, Thread
 from time import monotonic
 from uuid import uuid4
@@ -5,15 +6,18 @@ from uuid import uuid4
 import rclpy
 from action_msgs.msg import GoalStatus
 from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rosidl_runtime_py.convert import message_to_ordereddict
 
-from core_common.ros_context import ros_context
+from core_common.announcements import result_text
 from core_common.config import data_directory
 from core_common.errors import ErrorCode as Error
-from core_common.reporter import append_jsonl
+from core_common.reporter import Journal
 from core_common.robot_setup import require_fake
+from core_common.ros_context import ros_context
+from core_common.status_qos import SNAPSHOT_QOS, current_stamp
 from core_common.types import Outcome, State
 from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
 from core_interfaces.msg import Announcement, ControlStatus, LogEvent, RobotStatus, TaskResult
@@ -22,71 +26,105 @@ from core_interfaces.srv import EmergencyStop, Inspect, JobCommand, Locate
 from .task_assembly import AssemblyTask, TaskEnded
 
 
+ACTIONS = {MoveTo: 'move_to', Fetch: 'fetch', Stow: 'stow', Fasten: 'fasten'}
+SOURCES = {'gui', 'cli', 'voice'}
+TERMINAL = {GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_CANCELED}
+
+
 class Control(Node):
-    def __init__(self):
-        super().__init__('control')
-        require_fake(self.declare_parameter('mode', 'fake').value)
+    def __init__(self, **node_options):
+        super().__init__('control', **node_options)
+        self.mode = self.declare_parameter('mode', 'fake').value
+        require_fake(self.mode)
         self.data = data_directory(self.declare_parameter('data_dir', 'data').value)
         self.data.mkdir(parents=True, exist_ok=True)
-        self.timeout = self.declare_parameter('request_timeout', 5.0).value
-        self.worker_timeout = self.declare_parameter('worker_timeout', 120.0).value
+        self.limits = {key: self.declare_parameter(key + '_timeout', default).value
+                       for key, default in {
+                           'goal': 5.0, 'move_to': 15.0, 'fetch': 30.0, 'stow': 30.0,
+                           'fasten': 30.0, 'cancel': 2.0, 'action_settle': 3.0,
+                           'feedback': 3.0, 'progress': 3.0, 'inspect': 5.0, 'locate': 5.0,
+                           'robot_heartbeat': 1.0,
+                           'stop_response': 1.0, 'resume_response': 2.0, 'worker': 120.0,
+                       }.items()}
+        self.stop_limit = self.declare_parameter('stop_attempts', 3).value
+        if any(not isfinite(limit) or limit <= 0 for limit in self.limits.values()) or self.stop_limit < 1:
+            raise ValueError('Timeouts and stop_attempts must be positive')
+        heartbeat_period = self.declare_parameter('heartbeat_period', 0.2).value
+        if not isfinite(heartbeat_period) or heartbeat_period <= 0:
+            raise ValueError('heartbeat_period must be positive')
+        self.control_id = uuid4().hex
+        self.vision_status = 'UNVERIFIED'
+        self.worker_timeout = self.limits['worker']
         self.lock = RLock()
         self.shutdown = Event()
-        self.state = State.READY
+        self.state = State.RECOVER
+        self.starting = True
+        self.recovery = 'awaiting_robot_status'
+        self.stop_reason = ''
+        self.last_reason = ''
+        self.last_result = None
         self.task = None
         self.thread = None
         self.robot_status = None
         self.status_time = 0
-        self.stop_pending = None
-        self.stop_confirmed = False
-        self.resume_pending = None
-        self.resume_requested = False
-        self.resume_acknowledged = False
-        self.actions = {kind: ActionClient(self, kind, '/' + name) for kind, name in (
-            (MoveTo, 'move_to'), (Fetch, 'fetch'), (Stow, 'stow'), (Fasten, 'fasten'))}
+        self.stop_pending = self.resume_pending = None
+        self.resume_ack = None
+        self.stop_attempts = 0
+        self.stop_retry_at = 0.0
+        self.stop_request_id = ''
+        self.stop_observed_id = ''
+        self.stop_reassert = False
+        self.uncertain_action = False
+        self.actions = {kind: ActionClient(self, kind, '/' + name) for kind, name in ACTIONS.items()}
         self.service_clients = {kind: self.create_client(kind, name) for kind, name in (
             (Inspect, '/inspect'), (Locate, '/locate'), (EmergencyStop, '/robot/emergency_stop'))}
         self.create_service(JobCommand, '/job_command', self.command)
         self.create_service(EmergencyStop, '/emergency_stop', self.emergency_stop)
         self.create_subscription(RobotStatus, '/robot_status', self.receive_status, 10)
-        self.status = self.create_publisher(ControlStatus, '/control_status', 10)
-        self.logs = self.create_publisher(LogEvent, '/event_log', 10)
-        self.results = self.create_publisher(TaskResult, '/task_result', 10)
+        self.status = self.create_publisher(ControlStatus, '/control_status', SNAPSHOT_QOS)
+        self.logs = self.create_publisher(LogEvent, '/event_log', 100)
+        self.results = self.create_publisher(TaskResult, '/task_result', SNAPSHOT_QOS)
         self.announcements = self.create_publisher(Announcement, '/announce', 10)
-        self.create_timer(0.2, self.tick)
+        self.journal = Journal(self.data, self.get_logger().error)
+        self.create_timer(heartbeat_period, self.tick)
 
     def stamp(self):
         return self.get_clock().now().to_msg()
 
-    def receive_status(self, msg):
+    def receive_status(self, message):
         with self.lock:
-            self.robot_status = msg
+            if not current_stamp(self, message.stamp, self.limits['robot_heartbeat']):
+                return
+            previous = self.robot_status
+            self.robot_status = message
             self.status_time = monotonic()
-            if msg.stopped and self.state != State.STOPPED:
-                self.latch_stop('robot_reported_stopped')
-            elif self.resume_acknowledged and msg.safe_to_move and not msg.stopped and not msg.busy:
-                self.resume_acknowledged = False
-                self.stop_confirmed = False
-                self.state = State.READY
-                self.log('', State.READY, 'operator_resume')
-                self.publish_status()
+            if message.stopped:
+                reason = message.stop_reason or 'robot_reported_stopped'
+                if self.state != State.STOPPED:
+                    self.latch_stop(reason)
+                elif reason != self.stop_reason and (not previous
+                        or previous.stop_reason != message.stop_reason):
+                    self.log(self.task.task_id if self.task else '', self.state, reason, 'WARN',
+                             node='robot_node')
 
     def publish_status(self):
-        self.status.publish(ControlStatus(stamp=self.stamp(), state=self.state,
-                                          task_id=self.task.task_id if self.task else ''))
+        record = self.task or self.last_result
+        self.status.publish(ControlStatus(
+            stamp=self.stamp(), mode=self.mode, state=self.state,
+            control_id=self.control_id, vision_status=self.vision_status,
+            task_id=self.task.task_id if self.task else '',
+            last_task_id=self.last_result.task_id if self.last_result is not None else '',
+            recovery=self.recovery, stop_reason=self.stop_reason,
+            top=record.top if record else '', side=record.side if record else '',
+            fastening=record.fastening if record else '', outcome=record.outcome if record else '',
+            last_reason=self.last_reason, allowed_commands=self.allowed_commands(),
+            states=list(record.states) if record else []))
 
-    def journal(self, filename, msg):
-        try:
-            append_jsonl(self.data / filename, message_to_ordereddict(msg))
-        except OSError as exc:
-            self.get_logger().error(f'{filename}: {exc}')
-
-    def log(self, task_id, stage, message, level='INFO'):
-        msg = LogEvent(stamp=self.stamp(), task_id=task_id, stage=stage,
-                       log_level=level, log_msg=message)
-        with self.lock:
-            self.journal('event_logs.jsonl', msg)
-            self.logs.publish(msg)
+    def log(self, task_id, stage, message, level='INFO', *, node='control', source=''):
+        msg = LogEvent(stamp=self.stamp(), task_id=task_id, stage=stage, node=node,
+                       source=source, log_level=level, log_msg=message)
+        self.journal.submit('event_logs.jsonl', message_to_ordereddict(msg))
+        self.logs.publish(msg)
 
     def announce(self, task, text):
         self.announcements.publish(Announcement(stamp=self.stamp(), task_id=task.task_id, text=text))
@@ -99,44 +137,183 @@ class Control(Node):
             self.log(task.task_id, state, 'state_transition')
             self.publish_status()
 
+    def fresh_robot(self):
+        return (self.robot_status is not None
+                and monotonic() - self.status_time < self.limits['robot_heartbeat']
+                and current_stamp(self, self.robot_status.stamp, self.limits['robot_heartbeat']))
+
     def clearance(self):
-        return (self.robot_status is not None and monotonic() - self.status_time < 1.0
-                and self.robot_status.safe_to_move)
+        return self.fresh_robot() and self.robot_status.safe_to_move and not self.robot_status.stopped
+
+    def physical_ready(self):
+        if not self.fresh_robot():
+            return False
+        robot = self.robot_status
+        return (not robot.busy and not robot.current_action and robot.current_pose.valid
+                and robot.gripper_valid and isfinite(robot.gripper_width)
+                and not robot.grip_detected and not robot.holding_item
+                and robot.force_state_known and not robot.force_control_active
+                and not robot.compliance_control_active)
 
     def require_clearance(self):
         with self.lock:
             if not self.clearance():
                 raise TaskEnded(Outcome.HOLD, 'motion_clearance_unavailable')
 
+    def allowed_commands(self):
+        allowed = []
+        if self.task:
+            if not self.task.cancelled and self.state not in (State.REPORT, State.STOPPED):
+                allowed.append('cancel')
+                if self.state == State.WAIT_WORKER and not self.task.done:
+                    allowed.append('done')
+        elif self.state == State.READY and self.clearance() and self.physical_ready():
+            allowed.append('check')
+        elif self.state == State.RECOVER and self.clearance() and self.physical_ready():
+            allowed.append('resume')
+        elif self.state == State.STOPPED and not (
+                self.uncertain_action or self.stop_pending or self.resume_pending or self.resume_ack):
+            if (self.physical_ready() and self.robot_status.stopped
+                    and self.robot_status.stop_confirmed and self.robot_status.stop_id
+                    and self.stop_observed_id == self.robot_status.stop_id
+                    and self.service_clients[EmergencyStop].service_is_ready()):
+                allowed.append('resume')
+        return allowed
+
+    def start_stop_cycle(self, *, reassert=False):
+        self.stop_attempts = 0
+        self.stop_retry_at = monotonic()
+        self.stop_request_id = uuid4().hex
+        self.stop_observed_id = ''
+        self.recovery = 'stop_pending'
+        self.stop_reassert = reassert
+
+    def start_robot_request(self, command, request_id):
+        client = self.service_clients[EmergencyStop]
+        timeout = self.limits[command + '_response']
+        expires = self.get_clock().now() + Duration(seconds=timeout)
+        request = EmergencyStop.Request(command=command, source='control', stop_id=request_id,
+                                        reason=self.stop_reason, expires_at=expires.to_msg())
+        try:
+            future = client.call_async(request)
+        except Exception as exc:
+            self.log('', self.state, f'{command}_request_failed: {exc}', 'WARN')
+            return None
+        return future, monotonic() + timeout
+
+    def robot_reply(self, command):
+        attribute = command + '_pending'
+        pending = getattr(self, attribute)
+        if pending is None:
+            return None
+        future, deadline = pending
+        expired = monotonic() >= deadline
+        if not future.done() and not expired:
+            return None
+        setattr(self, attribute, None)
+        if expired:
+            if not future.done():
+                self.service_clients[EmergencyStop].remove_pending_request(future)
+                future.cancel()
+            self.log('', self.state, f'{command}_response_timeout', 'WARN')
+            return False
+        try:
+            response = future.result()
+            if response.success:
+                return True
+            self.log('', self.state, f'{command}_rejected: {response.reason}', 'WARN')
+        except Exception as exc:
+            self.log('', self.state, f'{command}_response_failed: {exc}', 'WARN')
+        return False
+
     def tick(self):
         with self.lock:
-            client = self.service_clients[EmergencyStop]
-            if (self.state == State.STOPPED and not self.stop_confirmed
-                    and not self.stop_pending and not self.resume_pending):
-                if client.service_is_ready():
-                    self.stop_pending = client.call_async(EmergencyStop.Request(command='stop'))
-            if self.stop_pending and self.stop_pending.done():
-                self.stop_confirmed = self.stop_pending.result().success
-                self.stop_pending = None
-            if self.resume_pending and self.resume_pending.done():
-                reply = self.resume_pending.result()
-                self.resume_pending = None
-                if self.resume_requested and reply.success:
-                    self.resume_acknowledged = True
-                elif self.resume_requested:
-                    self.log('', State.STOPPED, reply.reason, 'WARN')
-                self.resume_requested = False
+            if self.task and not self.fresh_robot():
+                self.latch_stop('robot_heartbeat_lost')
+            if self.state == State.STOPPED:
+                self.tick_stop()
+            elif self.starting and self.fresh_robot():
+                self.starting = False
+                if self.clearance() and self.physical_ready():
+                    self.state, self.recovery = State.READY, ''
+                else:
+                    self.recovery = 'physical_state_unconfirmed'
+            elif not self.task and self.state == State.READY:
+                if not self.clearance() or not self.physical_ready():
+                    self.state = State.RECOVER
+                    self.recovery = 'physical_state_unconfirmed'
+            if not all(self.service_clients[kind].service_is_ready() for kind in (Inspect, Locate)):
+                self.vision_status = 'UNAVAILABLE'
+            elif self.vision_status == 'UNAVAILABLE':
+                self.vision_status = 'UNVERIFIED'
             self.publish_status()
 
-    def latch_stop(self, reason):
+    def tick_stop(self):
+        self.robot_reply('stop')
+        resume = self.robot_reply('resume')
+        if resume is True and self.recovery == 'resume_pending':
+            self.resume_ack = monotonic() + self.limits['resume_response']
+        elif resume is not None:
+            self.start_stop_cycle(reassert=True)
+        if self.resume_ack:
+            if self.clearance() and self.physical_ready():
+                self.complete_recovery()
+            elif monotonic() >= self.resume_ack:
+                self.resume_ack = None
+                self.log('', self.state, 'resume_status_timeout', 'WARN')
+                self.start_stop_cycle(reassert=True)
+            return
+        if self.resume_pending:
+            return
+        robot = self.robot_status
+        if self.fresh_robot() and robot.stopped and robot.stop_confirmed and robot.stop_id:
+            # During a re-latch, an old stop snapshot cannot confirm the new stop request.
+            if not self.stop_reassert or robot.stop_id == self.stop_request_id:
+                self.stop_observed_id = robot.stop_id
+                self.recovery = 'stop_confirmed'
+                return
+        if not self.stop_pending and monotonic() >= self.stop_retry_at:
+            if self.stop_attempts >= self.stop_limit:
+                self.recovery = 'stop_unconfirmed'
+            else:
+                self.stop_attempts += 1
+                if self.service_clients[EmergencyStop].service_is_ready():
+                    self.stop_pending = self.start_robot_request('stop', self.stop_request_id)
+                else:
+                    self.log('', self.state, 'robot_stop_service_unavailable', 'WARN')
+                if self.stop_pending is None:
+                    self.stop_retry_at = monotonic() + self.limits['stop_response']
+
+    def complete_recovery(self):
+        self.resume_ack = None
+        self.starting = False
+        self.state = State.READY
+        self.recovery = 'confirmed'
+        self.stop_reason = ''
+        self.log('', self.state, 'operator_resume')
+
+    def latch_stop(self, reason, source=''):
         with self.lock:
-            self.resume_requested = False
-            self.resume_acknowledged = False
-            self.stop_confirmed = False
-            self.state = State.STOPPED
-            if self.task and State.STOPPED not in self.task.states:
-                self.task.states.append(State.STOPPED)
-            self.log(self.task.task_id if self.task else '', State.STOPPED, reason, 'WARN')
+            if self.state == State.STOPPED and not (self.resume_pending or self.resume_ack):
+                if reason != self.stop_reason:
+                    self.log(self.task.task_id if self.task else '', self.state,
+                             reason, 'WARN', source=source)
+                return
+            if self.resume_pending:
+                future, _ = self.resume_pending
+                self.service_clients[EmergencyStop].remove_pending_request(future)
+                future.cancel()
+                self.resume_pending = None
+            self.resume_ack = None
+            self.start_stop_cycle(reassert=self.state == State.STOPPED)
+            if self.state != State.STOPPED:
+                self.starting = False
+                self.state = State.STOPPED
+                self.stop_reason = reason
+                self.last_reason = reason
+                if self.task:
+                    self.task.states.append(State.STOPPED)
+                self.log(self.task.task_id if self.task else '', self.state, reason, 'WARN', source=source)
             self.publish_status()
 
     def emergency_stop(self, request, response):
@@ -145,8 +322,12 @@ class Control(Node):
                 response.error_code = Error.INVALID
                 response.reason = 'expected_stop'
                 return response
-            self.latch_stop('operator_stop')
-            self.tick()
+            self.latch_stop('operator_stop', request.source)
+            if self.recovery == 'stop_unconfirmed' and not self.stop_pending:
+                self.start_stop_cycle(reassert=True)
+            self.tick_stop()
+            self.log(self.task.task_id if self.task else '', self.state,
+                     'stop request accepted', source=request.source)
             response.success = True
             response.reason = 'control_stop_latched'
             return response
@@ -154,109 +335,204 @@ class Control(Node):
     def command(self, request, response):
         with self.lock:
             command = request.command
+            source = request.source
+            active_id = self.task.task_id if self.task else ''
             reason = 'command_unavailable_in_state'
-            if command == 'check' and self.state == State.READY and self.task is None:
-                if self.clearance():
-                    self.task = AssemblyTask(self, uuid4().hex)
+            if source not in SOURCES:
+                reason = 'invalid_command_source'
+            elif command == 'resume' and source == 'voice':
+                reason = 'voice_recovery_forbidden'
+            elif command == 'stop':
+                reason = 'use_emergency_stop'
+            elif command in self.allowed_commands():
+                if command == 'check':
+                    self.recovery = self.last_reason = ''
+                    self.task = AssemblyTask(self, uuid4().hex, source)
+                    active_id = self.task.task_id
                     self.thread = Thread(target=self.run_task, args=(self.task,))
                     self.thread.start()
-                    response.accepted = True
-                else:
-                    reason = 'motion_clearance_unavailable'
-            elif command == 'done' and self.state == State.WAIT_WORKER and not self.task.done:
-                self.task.done = True
+                elif command == 'done':
+                    self.task.done = True
+                elif command == 'cancel':
+                    self.task.cancelled = True
+                elif command == 'resume':
+                    if self.state == State.STOPPED:
+                        self.resume_pending = self.start_robot_request('resume', self.robot_status.stop_id)
+                        if self.resume_pending is None:
+                            response.reason = 'resume_request_failed'
+                            response.state = self.state
+                            return response
+                        self.recovery = 'resume_pending'
+                    else:
+                        self.complete_recovery()
                 response.accepted = True
-            elif command == 'cancel' and self.task and self.state not in (State.REPORT, State.STOPPED):
-                self.task.cancelled = True
-                response.accepted = True
-            elif command == 'resume' and self.state == State.STOPPED and self.task is None:
-                client = self.service_clients[EmergencyStop]
-                if (self.stop_confirmed and self.resume_pending is None
-                        and not self.resume_acknowledged and client.service_is_ready()):
-                    self.resume_pending = client.call_async(EmergencyStop.Request(command='resume'))
-                    self.resume_requested = True
-                    response.accepted = True
-                else:
-                    reason = 'awaiting_robot_stop_confirmation'
+                reason = 'accepted'
+            elif command == 'resume' and self.state == State.STOPPED:
+                reason = 'awaiting_robot_stop_confirmation'
+            self.log(active_id, self.state, f'{command}: {reason}',
+                     'INFO' if response.accepted else 'WARN', source=source)
+            self.publish_status()
             response.state = self.state
-            response.task_id = self.task.task_id if self.task else ''
-            response.reason = 'accepted' if response.accepted else reason
+            response.task_id = active_id
+            response.reason = reason
             return response
 
     def guard(self, task):
         with self.lock:
             if self.state == State.STOPPED:
-                raise TaskEnded(Outcome.HOLD, 'stopped')
+                raise TaskEnded(Outcome.HOLD, self.stop_reason)
             if self.shutdown.is_set() or task.cancelled:
                 raise TaskEnded(Outcome.HOLD, 'cancelled')
 
-    def wait_for(self, task, condition, timeout, reason):
+    def wait_for(self, task, condition, timeout, reason, progress=None):
         deadline = monotonic() + timeout
         while True:
             self.guard(task)
             if condition():
                 return
-            if monotonic() >= deadline:
+            now = monotonic()
+            if now >= deadline:
                 raise TaskEnded(Outcome.HOLD, reason)
+            if progress is not None:
+                if now - progress['received'] >= self.limits['feedback']:
+                    raise TaskEnded(Outcome.HOLD, 'robot_action_feedback_timeout')
+                if now - progress['advanced'] >= self.limits['progress']:
+                    raise TaskEnded(Outcome.HOLD, 'robot_action_progress_timeout')
             self.shutdown.wait(0.02)
 
     def service(self, task, kind, request):
         client = self.service_clients[kind]
-        self.wait_for(task, client.service_is_ready, self.timeout, 'vision_service_unavailable')
-        future = client.call_async(request)
+        timeout = self.limits[kind.__name__.lower()]
+        future = None
         try:
-            self.wait_for(task, future.done, self.timeout, 'vision_service_timeout')
-            return future.result()
+            self.wait_for(task, client.service_is_ready, timeout, 'vision_service_unavailable')
+            future = client.call_async(request)
+            self.wait_for(task, future.done, timeout, 'vision_service_timeout')
+            reply = future.result()
+            with self.lock:
+                self.vision_status = ('FAKE OK' if reply.success else
+                                      'NOT_IMPLEMENTED' if reply.error_code == Error.NOT_IMPLEMENTED
+                                      else 'ERROR')
+            return reply
+        except TaskEnded as exc:
+            if exc.reason.startswith('vision_service_'):
+                with self.lock:
+                    self.vision_status = 'UNAVAILABLE' if future is None else 'TIMEOUT'
+            raise
         finally:
-            if not future.done():
+            if future is not None and not future.done():
+                client.remove_pending_request(future)
                 future.cancel()
 
     def action(self, task, kind, goal):
         client = self.actions[kind]
-        self.wait_for(task, client.server_is_ready, self.timeout, 'robot_action_unavailable')
+        self.wait_for(task, client.server_is_ready, self.limits['goal'], 'robot_action_unavailable')
+        progress = {'value': -1, 'advanced': monotonic(), 'received': monotonic()}
+
+        def receive_feedback(event):
+            update = event.feedback
+            progress['received'] = monotonic()
+            if update.progress > progress['value']:
+                progress.update(value=update.progress, advanced=monotonic())
+            if update.log_msg:
+                self.log(task.task_id, update.stage, update.log_msg, update.log_level, node='robot_node')
+
         with self.lock:
             self.guard(task)
             self.require_clearance()
-            pending = client.send_goal_async(goal, feedback_callback=lambda event: self.log(
-                task.task_id, event.feedback.stage, event.feedback.log_msg, event.feedback.log_level))
-        handle = None
-        result = None
+            pending = client.send_goal_async(goal, feedback_callback=receive_feedback)
+        handle = result = None
         try:
-            self.wait_for(task, pending.done, self.timeout, 'robot_goal_response_timeout')
+            self.wait_for(task, pending.done, self.limits['goal'], 'robot_goal_response_timeout')
             handle = pending.result()
             if not handle.accepted:
                 raise TaskEnded(Outcome.HOLD, 'robot_goal_rejected')
+            task.last_goal_id = bytes(handle.goal_id.uuid).hex()
             result = handle.get_result_async()
-            self.wait_for(task, result.done, self.timeout, 'robot_action_timeout')
+            progress['advanced'] = progress['received'] = monotonic()
+            self.wait_for(task, result.done, self.limits[ACTIONS[kind]], 'robot_action_timeout', progress)
             reply = result.result()
+            if kind is Fasten:
+                task.capture_fastening(reply.result)
             if reply.result.error_code == Error.STOPPED:
-                self.latch_stop('robot_action_stopped')
-                raise TaskEnded(Outcome.HOLD, 'stopped')
-            if reply.status not in (GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_ABORTED):
+                with self.lock:
+                    self.latch_stop(reply.result.stop_reason or 'robot_action_stopped')
+                raise TaskEnded(Outcome.HOLD, self.stop_reason)
+            if reply.status not in TERMINAL:
+                self.mark_uncertain(None, 'robot_goal_completion_uncertain')
+                raise TaskEnded(Outcome.HOLD, self.stop_reason)
+            if reply.status == GoalStatus.STATUS_CANCELED:
                 raise TaskEnded(Outcome.HOLD, 'robot_action_cancelled')
             return reply.result
         except TaskEnded:
             if handle is None:
-                # Acceptance is uncertain. Latch stop before any subsequent task.
-                self.latch_stop('robot_goal_acceptance_uncertain')
+                self.mark_uncertain(None, 'robot_goal_acceptance_uncertain')
                 pending.add_done_callback(self.cancel_late_goal)
-            elif handle.accepted and (result is None or not result.done()):
-                handle.cancel_goal_async()
-                deadline = monotonic() + self.timeout
-                while result is not None and not result.done() and monotonic() < deadline:
-                    if self.shutdown.wait(0.02):
-                        break
+            elif handle.accepted:
                 if result is None or not result.done():
-                    self.latch_stop('robot_goal_completion_uncertain')
+                    self.settle_action(task, kind, handle, result)
+                elif (result.cancelled() or result.exception() is not None
+                      or result.result().status not in TERMINAL):
+                    self.mark_uncertain(result, 'robot_goal_completion_uncertain')
                 elif kind is Fasten:
-                    task.episode_id = result.result().result.episode_id
+                    task.capture_fastening(result.result().result)
+            raise
+        except Exception:
+            # A transport exception after submission cannot prove the Action ended.
+            self.mark_uncertain(result, 'internal_error')
             raise
 
-    @staticmethod
-    def cancel_late_goal(future):
+    def settle_action(self, task, kind, handle, result):
+        try:
+            cancel = handle.cancel_goal_async()
+            self.wait_response(cancel, self.limits['cancel'])
+            if not cancel.done():
+                cancel.cancel()
+                self.log(task.task_id, self.state, 'robot_cancel_response_timeout', 'WARN')
+            elif not cancel.result().goals_canceling:
+                self.log(task.task_id, self.state, 'robot_cancel_not_accepted', 'WARN')
+            if result is not None and self.wait_response(result, self.limits['action_settle']):
+                reply = result.result()
+                if reply.status in TERMINAL:
+                    if kind is Fasten:
+                        task.capture_fastening(reply.result)
+                    return
+        except Exception as exc:
+            self.log(task.task_id, self.state, f'robot_cancel_failed: {exc}', 'WARN')
+        self.mark_uncertain(result, 'robot_goal_completion_uncertain')
+
+    def wait_response(self, future, timeout):
+        deadline = monotonic() + timeout
+        while not future.done() and not self.shutdown.is_set() and monotonic() < deadline:
+            self.shutdown.wait(0.02)
+        return future.done()
+
+    def mark_uncertain(self, future, reason):
+        with self.lock:
+            self.uncertain_action = True
+            self.latch_stop(reason)
+        if future is not None:
+            future.add_done_callback(self.confirm_terminal)
+
+    def confirm_terminal(self, future):
+        if not future.cancelled() and future.exception() is None and future.result().status in TERMINAL:
+            with self.lock:
+                self.uncertain_action = False
+
+    def cancel_late_goal(self, future):
+        if future.cancelled() or future.exception() is not None:
+            return
         goal = future.result()
-        if goal is not None and goal.accepted:
+        if goal.accepted:
             goal.cancel_goal_async()
+            goal.get_result_async().add_done_callback(self.confirm_terminal)
+        else:
+            with self.lock:
+                self.uncertain_action = False
+
+    def terminal_snapshot(self, task):
+        return (not task.last_goal_id or (self.fresh_robot()
+                and self.robot_status.last_completed_goal_id == task.last_goal_id))
 
     def run_task(self, task):
         try:
@@ -267,25 +543,38 @@ class Control(Node):
             self.get_logger().error(f'Task error: {exc}')
             outcome, reason = Outcome.HOLD, 'internal_error'
             self.latch_stop(reason)
+        deadline = monotonic() + self.limits['robot_heartbeat']
+        while (self.state != State.STOPPED and not self.terminal_snapshot(task)
+               and not self.shutdown.is_set() and monotonic() < deadline):
+            self.shutdown.wait(0.02)
         with self.lock:
             if self.state == State.STOPPED:
-                outcome, reason = Outcome.HOLD, 'stopped'
+                outcome, reason = Outcome.HOLD, self.stop_reason
             else:
                 if task.cancelled:
                     outcome, reason = Outcome.HOLD, 'cancelled'
                 self.state = State.REPORT
                 task.states.append(State.REPORT)
                 self.log(task.task_id, self.state, 'state_transition')
-                self.publish_status()
-            result = TaskResult(stamp=self.stamp(), task_id=task.task_id, outcome=outcome,
-                                reason=reason, fastening=task.fastening, side=task.side,
-                                episode_id=task.episode_id, states=task.states)
-            self.journal('task_results.jsonl', result)
+            task.outcome = outcome
+            self.last_reason = reason
+            result = TaskResult(
+                stamp=self.stamp(), task_id=task.task_id, mode=self.mode, source=task.source,
+                outcome=outcome, reason=reason, stop_reason=self.stop_reason, top=task.top,
+                fastening=task.fastening, side=task.side, episode_id=task.episode_id,
+                tightening_valid=task.tightening_valid, peak_torque=task.peak_torque,
+                turns=task.turns, recipe_id=task.recipe_id, states=task.states)
+            self.journal.submit('task_results.jsonl', message_to_ordereddict(result))
+            self.last_result = result
             self.results.publish(result)
-            self.announce(task, f'{outcome} {reason}')
+            self.announce(task, result_text(outcome, reason))
             self.task = None
             if self.state != State.STOPPED:
-                self.state = State.READY
+                if self.terminal_snapshot(task) and self.clearance() and self.physical_ready():
+                    self.state = State.READY
+                else:
+                    self.state = State.RECOVER
+                    self.recovery = 'physical_state_unconfirmed'
             self.publish_status()
 
 
@@ -300,4 +589,5 @@ def main():
             node.shutdown.set()
             if node.thread:
                 node.thread.join()
+            node.journal.close()
             node.destroy_node()

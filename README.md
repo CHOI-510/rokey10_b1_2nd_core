@@ -1,44 +1,46 @@
-# Core Project v0.1
+# rokey10_b1_2nd_core
 
-협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. P0-a는 Fake Robot과 Fake Vision으로 전체 작업을 검증합니다.
+협동-2 볼트 조립 프로젝트의 ROS 2 관제 코어입니다. 현재 구현은 Fake Robot과 Fake Vision으로 단일 작업 FSM, 검사·체결 판정, 정지·복구, JSONL 및 Episode 기록을 실행합니다. Fake 통합 시나리오 10개와 관리자 GUI **CORE MONITOR**의 조작·상태 표시를 검증했습니다. 기본 실행에는 DB와 외부 AI API가 필요 없습니다.
+
+실물 통합에는 두산 M0609·RG2 어댑터, 카메라·힘 센서 발행기, YOLO 연동, 독립 그리퍼 상태와 현장 안전 검증이 남아 있습니다. [로드맵](docs/ROADMAP.md)
 
 ## 설치 및 빌드
 
-Ubuntu 24.04에서 ROS 2 Jazzy, Cyclone DDS RMW, colcon과 ROSIDL 빌드 도구가 필요합니다. GUI에는 선택적으로 `python3-tk`를 사용합니다. 설치 여부는 `ros2 pkg prefix rmw_cyclonedds_cpp` 등으로 확인합니다. 누락된 경우에만 설치합니다.
+Ubuntu 24.04에서 ROS 2 Jazzy와 Cyclone DDS를 사용합니다. Jazzy apt 저장소가 설정된 환경에서 필요한 패키지를 설치합니다. GUI는 Tkinter와 Pillow를 사용하며 그래픽 디스플레이가 필요합니다.
 
 ```bash
 sudo apt install ros-jazzy-ros-base ros-jazzy-rmw-cyclonedds-cpp \
-  ros-jazzy-rosidl-default-generators python3-colcon-common-extensions
-```
-
-빌드는 프로젝트 루트에서 실행합니다.
-
-```bash
-cd ~/cobot2_ws/src/core_project
+  ros-jazzy-rosidl-default-generators ros-jazzy-sensor-msgs ros-jazzy-geometry-msgs \
+  python3-colcon-common-extensions python3-tk python3-pil
+git clone -b develop https://github.com/CHOI-510/rokey10_b1_2nd_core.git
+cd rokey10_b1_2nd_core
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 ```
 
-## Fake 실행
-
-Launch, CLI, 테스트 터미널에서 다음 설정을 동일하게 적용합니다.
+이미 체크아웃했다면 저장소 루트에서 빌드합니다. Launch, GUI, CLI와 테스트를 실행하는 **각 터미널**에서도 저장소 루트에서 아래 순서로 source합니다.
 
 ```bash
-cd ~/cobot2_ws/src/core_project
 source /opt/ros/jazzy/setup.bash
 source install/local_setup.bash
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 ```
 
+위 설정은 같은 PC 안에서만 ROS 노드를 검색합니다. 팀원 PC에 GUI나 CLI를 따로 띄울 때는 각 PC에서 같은 버전의 인터페이스를 빌드·source하고, 두 PC의 RMW와 팀에서 합의한 Domain ID를 맞춥니다. DDS 검색과 트래픽이 허용된 같은 서브넷에서 양쪽의 검색 범위를 `SUBNET`으로 설정하고 노드를 시작합니다. 이 문서의 회귀 검증은 한 PC의 `LOCALHOST` 범위에서 수행했습니다.
+
+## Fake 관제와 CLI
+
 ```bash
 ros2 launch core_bringup system.launch.py mode:=fake
 ```
 
-다른 터미널에서 CLI로 작업을 제어합니다. 기본 시나리오 `missing`에서는 `WAIT_WORKER`에 도달한 뒤 `done`을 보냅니다.
+기본 시나리오는 `missing`입니다. Launch는 관제·Fake Robot·Fake Vision을 띄우고 GUI는 기본값으로 꺼집니다. 인자와 시나리오 목록은 `ros2 launch core_bringup system.launch.py --show-args`로 확인할 수 있습니다.
+
+다른 터미널에서 상태를 보거나 아래 CLI 명령 중 필요한 명령을 실행합니다.
 
 ```bash
-ros2 topic echo /control_status
+ros2 topic echo /control_status --qos-durability transient_local
 ros2 run core_control control_interface check
 ros2 run core_control control_interface done
 ros2 run core_control control_interface cancel
@@ -46,14 +48,51 @@ ros2 run core_control control_interface stop
 ros2 run core_control control_interface resume
 ```
 
-`resume`은 정지 확인 후 새 작업을 받을 수 있게 하는 명시적 명령입니다. `check`가 새 작업을 시작합니다. 결과는 `data/task_results.jsonl`에, 이벤트는 `data/event_logs.jsonl`에 기록됩니다. `data_dir:=/절대/경로`로 변경할 수 있습니다. ROS 토픽 기반 모니터는 `ros2 run core_control monitor_gui`로 실행합니다.
+기본 기록은 실행 디렉터리 아래의 `data/task_results.jsonl`, `data/event_logs.jsonl`, `data/episodes/`에 저장합니다. Launch의 `data_dir:=/절대/경로`로 변경할 수 있습니다.
+
+## CORE MONITOR
+
+다음 두 방식 중 하나를 사용합니다.
+
+```bash
+# 이미 실행 중인 Fake 관제에 GUI 연결
+ros2 run core_control monitor_gui --ros-args -p mode:=fake
+
+# Fake 관제·Fake 노드와 GUI를 한 Launch에서 실행
+ros2 launch core_bringup system.launch.py mode:=fake gui:=true
+```
+
+단독 명령은 GUI 프로세스만 띄웁니다. 관제와 Fake Robot·Fake Vision을 별도로 실행해야 작업 상태를 받고 명령으로 Fake 작업을 수행할 수 있습니다. GUI를 닫아도 관제는 계속 실행됩니다.
+
+| 버튼 | CLI | 동작 |
+|---|---|---|
+| CHECK | `check` | READY에서 이동 허가를 확인한 뒤 새 작업을 시작합니다. |
+| WORKER DONE | `done` | WAIT_WORKER의 현재 작업을 이어갑니다. 완료 접수 후 3초 대기와 이동 허가 확인을 거쳐 재검사합니다. |
+| RESUME | `resume` | STOPPED 또는 RECOVER에서 물리 조건을 확인한 뒤 명시적으로 복귀를 요청합니다. READY가 표시되면 CHECK로 새 작업을 시작할 수 있습니다. |
+| CANCEL | `cancel` | 진행 중인 작업의 취소를 요청합니다. |
+| STOP | `stop` | GUI는 관제와 Robot에 독립적으로 소프트웨어 정지를 요청합니다. CLI는 관제 경로를 호출합니다. 물리적 비상정지 장치가 필요합니다. |
+
+### 볼트 누락 예제
+
+1. 위 통합 Launch를 실행하고 CORE MONITOR에 READY가 표시될 때까지 기다립니다.
+2. CHECK를 눌러 INSPECT와 FETCH를 거쳐 WAIT_WORKER에 도달했는지 확인합니다.
+3. WORKER DONE을 누릅니다. 재검사와 체결을 마치면 화면에 PASS가 표시되고 관제는 READY로 돌아갑니다.
+4. 결과 카드와 이벤트 로그에서 같은 작업의 상단 판정, 체결 판정, 최종 결과를 확인합니다.
+
+기본 Fake 실행에는 영상·Wrench 발행기가 없습니다. 손목 카메라의 기본 토픽은 `/camera/color/image_raw`이며 화면에는 NO SIGNAL이 표시됩니다. 측면 카메라는 토픽을 비워 OFF로 표시하고 체결 패널은 N/A로 표시합니다. 외부 발행기를 연결할 때는 Launch 인자 `wrist_image_topic`, `side_image_topic`, `wrench_topic`을 사용합니다. 구독 형식, 신호 표시와 MOCK의 의미는 [통신 계약](docs/INTERFACES.md#관리자-gui)을 참고합니다.
+
+JPEG Preview와 기존 UDP 송수신 실행법은 [영상 파이프라인](docs/VIDEO_PIPELINE.md)에 있습니다. 공통 인터페이스가 바뀌었으므로 관제·Robot·GUI·언어 및 외부 소비자는 같은 변경본을 빌드해야 합니다. [팀 재빌드](docs/DEVELOPMENT.md#안정화-변경과-팀-재빌드)
 
 ## 통합 테스트
 
-기존 Core Launch를 종료한 후 실행합니다. 테스트는 각 시나리오를 독립적으로 기동하고 임시 경로에 기록합니다.
+같은 Domain에서 실행 중인 Core Launch를 종료한 뒤 저장소 루트에서 실행합니다. 테스트는 Fake Launch를 자체 기동하고 임시 디렉터리에 기록합니다.
 
 ```bash
 python3 tests/fake_integration.py
+python3 tests/stability_integration.py
+python3 tests/video_pipeline.py
+# 그래픽 디스플레이가 있는 터미널에서 실행
+python3 tests/monitor_integration.py
 ```
 
-[설계 기준](docs/DESIGN_V0.1.md) · [아키텍처](docs/ARCHITECTURE.md) · [인터페이스](docs/INTERFACES.md) · [안전](docs/SAFETY.md) · [개발](docs/DEVELOPMENT.md) · [로드맵](docs/ROADMAP.md) · [Git](docs/GIT_GUIDE.md)
+[설계 기준](docs/DESIGN_V0.1.md) · [아키텍처](docs/ARCHITECTURE.md) · [인터페이스](docs/INTERFACES.md) · [안전](docs/SAFETY.md) · [개발·검증](docs/DEVELOPMENT.md) · [로드맵](docs/ROADMAP.md) · [Git](docs/GIT_GUIDE.md)

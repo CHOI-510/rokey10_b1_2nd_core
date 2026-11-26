@@ -3,3 +3,6 @@ string text
 bool success
 int32 error_code
 string command
+bool confidence_valid
+float32 confidence
+bool needs_confirmation
