@@ -39,7 +39,9 @@ trajectory: t, TCP xyz/자세, J1~J6, F/M 6축, target force, stiffness, command
 ## 패키지 (필수 7)
 core_interfaces, core_common, core_control, core_robot, core_vision, core_language, core_bringup (+ 선택 core_database, web_ui)
 
-## 우선순위
+## v0.1 설계 동결 시점의 우선순위
+
+현재 구현과 남은 작업은 [로드맵](ROADMAP.md)을 참고합니다.
 P0-a 관제 코어(Fake 9단계 CLI 완주), JSONL 및 Episode 계약 → P0-b 실물 시퀀스 → P0-c 음성·LLM → P1 GUI 및 Episode 검증 → P2 DB/Web UI, Task Queue, 글로벌 카메라, IL/RL
 
 ## 첫날 완료 기준 (Fake)
