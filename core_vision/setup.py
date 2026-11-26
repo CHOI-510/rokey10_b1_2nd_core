@@ -10,5 +10,5 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    entry_points={"console_scripts": ['vision_node = core_vision.vision_node:main']},
+    entry_points={"console_scripts": ['vision_node = core_vision.vision_node:main', 'vision1_node = core_vision.vision1_node:main', 'vision1_calibrate = core_vision.vision1_calibrate:main']},
 )
