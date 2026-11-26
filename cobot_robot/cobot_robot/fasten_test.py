@@ -21,6 +21,12 @@
   ros2 run cobot_robot fasten_test --bolt 1 --sim --no-vision  # 가상: 힘 제어·그리퍼·비전 없이 순서만
   ros2 run cobot_robot slot_view                             # 로봇 없이 홈 각도 검출만 실시간 확인
 
+카메라가 이 PC 에 직접 꽂혀 있으면 (realsense2_camera 실행 중) 모든 명령에 --camera-topic 을 붙인다.
+  ros2 run cobot_robot fasten_test --bolt 1 --calib-vision --camera-topic /camera/camera/color/image_raw
+  ros2 run cobot_robot slot_view --camera-topic /camera/camera/color/image_raw
+보정 파일에는 영상 해상도가 기록된다. 체결 때 해상도가 다르면(UDP 1280x720 ↔ 직결 토픽 등) 멈추므로
+입력을 바꿨으면 --calib-vision 을 다시 돌린다.
+
 좌표는 모두 로봇 base 기준(mm, deg). 책상은 base z = -27.1.
 상수 · 체결 루틴은 fasten_core.py 에 있다 (ROS 2 /fasten Action 과 공용). 이 파일은 명령행 진입점과
 드라이버 건네기(그리퍼)만 맡는다. [튜닝] 표시 값은 fasten_core.py 에서 바꾼다.
@@ -29,11 +35,9 @@
 import argparse
 import sys
 import time
-from contextlib import ExitStack, contextmanager
-from threading import Thread
+from contextlib import ExitStack
 
 import rclpy
-from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 
 from cobot_robot.fasten_core import (BOLT_POSES_TAUGHT, GRIP_FORCE, GRIPPER_NAME, RESULT_DONE,
                                      RESULT_SIM_DONE, ROBOT_ID, TOOLCHARGER_IP, TOOLCHARGER_PORT,
@@ -57,28 +61,10 @@ def handover(log):
     input("[확인] 드라이버가 수직이고 흔들리지 않으면 Enter (중단은 Ctrl+C) > ")
 
 
-@contextmanager
 def ros_camera_factory(topic):
-    from cobot_robot.ros_image_camera import RosImageCamera
-
-    node = rclpy.create_node("fasten_test_camera", use_global_arguments=False)
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-
-    def spin():
-        try:
-            executor.spin()
-        except ExternalShutdownException:
-            pass
-
-    thread = Thread(target=spin, name="fasten-test-camera")
-    thread.start()
-    try:
-        yield lambda check_abort: RosImageCamera(node, topic, check_abort)
-    finally:
-        executor.shutdown()
-        thread.join()
-        node.destroy_node()
+    """cv_bridge 는 --camera-topic 일 때만 import 한다 (구현은 ros_image_camera.py)."""
+    from cobot_robot.ros_image_camera import ros_camera_factory as factory
+    return factory(topic)
 
 
 def main(args=None):

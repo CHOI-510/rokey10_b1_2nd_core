@@ -4,6 +4,7 @@
   ros2 run cobot_robot slot_view                # 로봇은 움직이지 않음
   ros2 run cobot_robot slot_view --bolt 1       # 대기 자세 → 볼트1 위 보기 높이(VIEW_H)로 이동한 뒤 시작
   ros2 run cobot_robot slot_view --bolt 1 --height 60
+  ros2 run cobot_robot slot_view --camera-topic /camera/camera/color/image_raw   # 카메라 직결 PC
 
 키
   화면 판정 = 최근 10 장을 합친 값 (fasten_test 와 같은 방식), 둘째 줄은 한 장 판정 · 각도는 0~90° 로 표시
@@ -14,7 +15,8 @@
   비켜선 상태의 회전은 fasten_test 와 똑같이 "볼트 축으로 돌아가 회전 → 다시 비켜서기" 로 한다.
   좋은 자리를 찾으면 터미널에 찍힌 VIEW_H · VIEW_OFFSET_TOOL 값을 fasten_core.py 에 옮겨 적는다.
 
-B-1 PC 에서 send 가 돌고 있어야 하고, b1_camera_udp.py view 창은 닫아야 한다(같은 포트).
+UDP 입력(기본)이면 B-1 PC 에서 send 가 돌고 있어야 하고, b1_camera_udp.py view 창은 닫아야 한다(같은 포트).
+--camera-topic 이면 이 PC 에서 realsense2_camera 가 떠 있어야 한다. 보정 해상도와 다르면 ROI 를 쓰지 않는다.
 로봇을 움직일 때는 터미널 1 에서 s → sodreal(또는 sodvir) 브링업이 떠 있어야 한다.
 """
 import argparse
@@ -22,11 +24,11 @@ import os
 import sys
 import time
 from collections import deque
+from contextlib import ExitStack
 
 import cv2
 
 from cobot_robot import slot_vision as sv
-from cobot_robot.udp_camera import UdpCamera
 
 JOG_Z_MM = 5.0
 JOG_ROT_DEG = 15.0
@@ -45,7 +47,8 @@ class Robot:
 
         self.ft = ft
         self.rclpy = rclpy
-        rclpy.init()
+        if not rclpy.ok():
+            rclpy.init()
         self.node = rclpy.create_node("slot_view", namespace=ft.ROBOT_ID)
         dr = ft.connect_dsr(self.node)      # DR_init 설정(name mangling 회피)은 connect_dsr 안에서
         self.dr = dr
@@ -104,7 +107,7 @@ class Robot:
 
     def close(self):
         self.node.destroy_node()
-        self.rclpy.shutdown()
+        self.rclpy.try_shutdown()
 
 
 def main():
@@ -116,6 +119,7 @@ def main():
     ap = argparse.ArgumentParser(description="홈 각도 검출 실시간 확인")
     ap.add_argument("--bolt", type=int, choices=[1, 2], help="이 볼트 위 보기 높이로 로봇을 옮긴 뒤 시작")
     ap.add_argument("--height", type=float, default=None, help="티칭점 위 높이 mm (기본 VIEW_H)")
+    ap.add_argument("--camera-topic", default="", help="ROS 원본 Image 토픽. 생략하면 기존 UDP 입력")
     opts = ap.parse_args(argv)
 
     calib = sv.load_calib()
@@ -123,77 +127,119 @@ def main():
     ref = calib["ref_deg"] if calib else None
     print(f"calib: {calib}")
 
-    robot = None
-    if opts.bolt:
-        from cobot_robot import fasten_core as ft
-        robot = Robot(opts.bolt, opts.height if opts.height is not None else ft.VIEW_H)
+    with ExitStack() as stack:
+        robot = None
+        if opts.bolt:
+            from cobot_robot import fasten_core as ft
+            robot = Robot(opts.bolt, opts.height if opts.height is not None else ft.VIEW_H)
+            stack.callback(robot.close)
+        cam = open_camera(opts.camera_topic, stack)
+        stack.callback(cv2.destroyAllWindows)
+        loop(cam, robot, calib, roi, ref)
 
-    cam = UdpCamera(unicast=True)
+
+def open_camera(topic, stack):
+    """topic 이 있으면 ROS Image 구독(자체 노드 · executor), 없으면 UDP. stack 이 닫을 때 정리한다."""
+    if not topic:
+        from cobot_robot.udp_camera import UdpCamera
+        cam = UdpCamera(unicast=True)
+        stack.callback(cam.close)
+        return cam
+    import rclpy
+    from cobot_robot.ros_image_camera import ros_camera_factory
+    if not rclpy.ok():
+        rclpy.init()
+        stack.callback(rclpy.try_shutdown)
+    factory = stack.enter_context(ros_camera_factory(topic, node_name="slot_view_camera"))
+    cam = factory(lambda: None)
+    stack.callback(cam.close)
+    print(f"ROS 영상 {topic} 구독 ({cam.reliability.name})", flush=True)
+    return cam
+
+
+def size_mismatch(calib, frame):
+    """보정 파일의 해상도와 다르면 경고 문구, 같으면 None."""
+    want = calib.get("image_size") if calib else None
+    got = [int(frame.shape[1]), int(frame.shape[0])]
+    if want is None:
+        return f"보정 파일에 해상도 기록 없음 (지금 {got}) — fasten_test 는 --calib-vision 을 다시 요구한다"
+    if want != got:
+        return f"영상 해상도 {got} ≠ 보정 때 {want} — 보정 ROI 를 쓰지 않음 (p 로 다시 고르거나 --calib-vision)"
+    return None
+
+
+def loop(cam, robot, calib, roi, ref):
     win = "slot_view"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     last_print = 0.0
+    last_wait = time.time()
+    checked_size = False
     recent = deque(maxlen=N_FRAMES)
-    try:
-        while True:
-            frame = cam.read(timeout=0.5)
-            if frame is None:
-                if cv2.waitKey(1) & 0xFF in (27, ord("q")):
-                    break
-                continue
-            recent.append(frame)
-            if roi:
-                one, one_conf, _ = sv.slot_angle(frame, roi)
-                angle, conf, lines, n = sv.slot_angle_multi(list(recent), roi)
-                vis = sv.draw(frame, roi, angle, conf, lines, ref)
-                cv2.putText(vis, f"{n}-frame | single: {sv.to90(one) if one is None else round(sv.to90(one), 1)} "
-                            f"({one_conf:.2f})", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
-                if time.time() - last_print > 1.0:
-                    a = "None" if angle is None else f"{sv.to90(angle):5.1f}"
-                    o = "None" if one is None else f"{sv.to90(one):5.1f}"
-                    print(f"[{n}장] angle={a} conf={conf:.2f}   | 한 장: angle={o} conf={one_conf:.2f}", flush=True)
-                    last_print = time.time()
-            else:
-                vis = frame.copy()
-                cv2.putText(vis, "press p to pick ROI", (10, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.imshow(win, vis)
-            k = cv2.waitKey(1) & 0xFF
-            if k in (27, ord("q")):
+    while True:
+        frame = cam.read(timeout=0.5)
+        if frame is None:
+            if time.time() - last_wait > 3.0:
+                print("영상 없음 — 카메라 입력 확인 (UDP send / --camera-topic)", flush=True)
+                last_wait = time.time()
+            if cv2.waitKey(1) & 0xFF in (27, ord("q")):
                 break
-            if k == ord("p"):
-                picked = sv.pick_roi(frame)
-                if picked:
-                    roi = picked
-                    recent.clear()
-                    print(f"roi={roi}")
-            elif k == ord("s"):
-                path = os.path.expanduser(f"~/cobot2_ws/logs/slot_view_{time.strftime('%H%M%S')}.jpg")
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                cv2.imwrite(path, frame)
-                print(f"saved {path} (원본)")
-            elif robot and k == ord("u"):
-                robot.jog_z(JOG_Z_MM)
+            continue
+        last_wait = time.time()
+        if not checked_size:
+            checked_size = True
+            warn = size_mismatch(calib, frame)
+            if warn:
+                print(warn, flush=True)
+                if calib and calib.get("image_size") is not None:
+                    roi = ref = None
+        recent.append(frame)
+        if roi:
+            one, one_conf, _ = sv.slot_angle(frame, roi)
+            angle, conf, lines, n = sv.slot_angle_multi(list(recent), roi)
+            vis = sv.draw(frame, roi, angle, conf, lines, ref)
+            cv2.putText(vis, f"{n}-frame | single: {sv.to90(one) if one is None else round(sv.to90(one), 1)} "
+                        f"({one_conf:.2f})", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+            if time.time() - last_print > 1.0:
+                a = "None" if angle is None else f"{sv.to90(angle):5.1f}"
+                o = "None" if one is None else f"{sv.to90(one):5.1f}"
+                print(f"[{n}장] angle={a} conf={conf:.2f}   | 한 장: angle={o} conf={one_conf:.2f}", flush=True)
+                last_print = time.time()
+        else:
+            vis = frame.copy()
+            cv2.putText(vis, "press p to pick ROI", (10, 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.imshow(win, vis)
+        k = cv2.waitKey(1) & 0xFF
+        if k in (27, ord("q")):
+            break
+        if k == ord("p"):
+            picked = sv.pick_roi(frame)
+            if picked:
+                roi = picked
                 recent.clear()
-            elif robot and k == ord("d"):
-                robot.jog_z(-JOG_Z_MM)
-                recent.clear()
-            elif robot and k in (ord("i"), ord("k"), ord("j"), ord("l")):
-                dx = JOG_XY_MM if k == ord("i") else -JOG_XY_MM if k == ord("k") else 0.0
-                dy = JOG_XY_MM if k == ord("j") else -JOG_XY_MM if k == ord("l") else 0.0
-                robot.jog_xy(dx, dy)
-                recent.clear()
-            elif robot and k == ord("["):
-                robot.rotate(-JOG_ROT_DEG)
-                recent.clear()
-            elif robot and k == ord("]"):
-                robot.rotate(JOG_ROT_DEG)
-                recent.clear()
-    finally:
-        cam.close()
-        cv2.destroyAllWindows()
-        if robot:
-            robot.close()
-
+                print(f"roi={roi}")
+        elif k == ord("s"):
+            path = os.path.expanduser(f"~/cobot2_ws/logs/slot_view_{time.strftime('%H%M%S')}.jpg")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            cv2.imwrite(path, frame)
+            print(f"saved {path} (원본)")
+        elif robot and k == ord("u"):
+            robot.jog_z(JOG_Z_MM)
+            recent.clear()
+        elif robot and k == ord("d"):
+            robot.jog_z(-JOG_Z_MM)
+            recent.clear()
+        elif robot and k in (ord("i"), ord("k"), ord("j"), ord("l")):
+            dx = JOG_XY_MM if k == ord("i") else -JOG_XY_MM if k == ord("k") else 0.0
+            dy = JOG_XY_MM if k == ord("j") else -JOG_XY_MM if k == ord("l") else 0.0
+            robot.jog_xy(dx, dy)
+            recent.clear()
+        elif robot and k == ord("["):
+            robot.rotate(-JOG_ROT_DEG)
+            recent.clear()
+        elif robot and k == ord("]"):
+            robot.rotate(JOG_ROT_DEG)
+            recent.clear()
 
 if __name__ == "__main__":
     main()

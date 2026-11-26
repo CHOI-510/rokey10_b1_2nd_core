@@ -129,6 +129,11 @@ RESULT_DONE = "torque_done"        # 체결 완료로 판정
 RESULT_SIM_DONE = "sim_done"       # --sim 전용
 
 
+def image_size(frame):
+    """[가로, 세로] 픽셀 — 보정 파일(JSON)에 그대로 저장 · 비교한다."""
+    return [int(frame.shape[1]), int(frame.shape[0])]
+
+
 def driver_pose(bolt_id):
     """208.4 TCP 로 잰 자세를 드라이버 끝 TCP 자세로 바꾸고, 스펀지를 뺀 만큼 내린다
     (툴이 수직 아래라 z 만 내려간다)."""
@@ -185,17 +190,20 @@ class Fastener:
                 self.sv = slot_vision
                 if self.strict_camera:
                     self.cam = camera_factory(self.guard)
-                    self.check_camera()
+                    first = self.check_camera()
                 else:
                     from cobot_robot.udp_camera import UdpCamera
                     self.cam = UdpCamera(port=CAM_PORT, unicast=True)
-                    if self.cam.latest(settle_s=0.0, timeout=3.0) is None:
+                    first = self.cam.latest(settle_s=0.0, timeout=3.0)
+                    if first is None:
                         raise Abort("camera: 3 초 동안 영상이 오지 않음 (B-1 PC send 확인, view 창은 닫기)")
                 if not calib_vision:
                     self.calib = slot_vision.load_calib()
                     if self.calib is None:
                         raise Abort(f"vision_calib 없음 — 먼저 --calib-vision 실행 ({slot_vision.CALIB_PATH})")
-                    now = {"view_h": VIEW_H, "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM}
+                    # ROI · 축 픽셀 · 자코비안은 픽셀 단위 → 해상도가 다르면 엉뚱한 곳을 가리킨다
+                    now = {"view_h": VIEW_H, "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM,
+                           "image_size": image_size(first)}
                     stale = {k: (self.calib.get(k), v) for k, v in now.items() if self.calib.get(k) != v}
                     if "jac_px_per_mm" not in self.calib:
                         stale["jac_px_per_mm"] = ("없음", "중심 맞추기용")
@@ -210,11 +218,21 @@ class Fastener:
                 raise
 
     def check_camera(self):
+        """ROS 영상이면 지금 영상이 들어오는지 확인하고 그 한 장을 돌려준다 (UDP 면 None)."""
         if self.strict_camera:
             try:
-                self.cam.latest(settle_s=0.0, timeout=3.0)
+                return self.cam.latest(settle_s=0.0, timeout=3.0)
             except RuntimeError as exc:
                 raise Abort(f"camera: {exc}") from exc
+        return None
+
+    def check_image_size(self, frames):
+        want = (self.calib or {}).get("image_size")
+        if want is None:
+            return
+        for frame in frames:
+            if image_size(frame) != want:
+                raise Abort(f"camera: 영상 해상도 {image_size(frame)} ≠ 보정 때 {want} — --calib-vision 다시 실행")
 
     # ------------------------------------------------------------ 중단 확인 · 단계 알림
     def guard(self):
@@ -337,6 +355,7 @@ class Fastener:
             raise
         if moved:
             self.move_rel([-dx, -dy, 0, 0, 0, 0], self.dr.DR_TOOL)
+        self.check_image_size(frames)
         return frames
 
     def view_and_measure(self, roi, ref=None, frames=None):
@@ -612,6 +631,7 @@ class Fastener:
                 "jac_px_per_mm": np.round(J, 4).tolist(),
                 "test_change_deg": round(change, 2), "view_h": VIEW_H,
                 "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM, "bolt": self.bolt_id,
+                "image_size": image_size(frames[-1]),
                 "date": datetime.now().isoformat(timespec="seconds")}
         self.sv.save_calib(data)
         self.log.info(f"비전 보정 저장: {self.sv.CALIB_PATH} → {data}")
