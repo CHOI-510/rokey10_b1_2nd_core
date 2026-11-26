@@ -19,6 +19,7 @@ __pycache__/
 !/models/vision/.gitkeep
 !/models/wakeword/
 !/models/wakeword/.gitkeep
+!/models/wakeword/hello_rokey_8332_32.tflite
 *.pt
 *.pth
 *.onnx
