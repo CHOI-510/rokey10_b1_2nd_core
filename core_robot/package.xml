@@ -9,5 +9,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>core_common</exec_depend>
   <exec_depend>core_interfaces</exec_depend>
+  <!-- fasten_backend:=real only (imported lazily); also needs dsr_msgs2 / DSR_ROBOT2 from the Doosan workspace -->
+  <exec_depend>cobot_robot</exec_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

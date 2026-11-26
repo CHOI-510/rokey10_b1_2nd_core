@@ -12,7 +12,7 @@
                     i / k = 툴 x +5 / -5 mm   j / l = 툴 y +5 / -5 mm  (볼트를 화면 가운데 · 드라이버에서 멀리)
                     아래로는 보기 높이에서 최대 30 mm 까지만 내려간다.
   비켜선 상태의 회전은 fasten_test 와 똑같이 "볼트 축으로 돌아가 회전 → 다시 비켜서기" 로 한다.
-  좋은 자리를 찾으면 터미널에 찍힌 VIEW_H · VIEW_OFFSET_TOOL 값을 fasten_test.py 에 옮겨 적는다.
+  좋은 자리를 찾으면 터미널에 찍힌 VIEW_H · VIEW_OFFSET_TOOL 값을 fasten_core.py 에 옮겨 적는다.
 
 B-1 PC 에서 send 가 돌고 있어야 하고, b1_camera_udp.py view 창은 닫아야 한다(같은 포트).
 로봇을 움직일 때는 터미널 1 에서 s → sodreal(또는 sodvir) 브링업이 떠 있어야 한다.
@@ -33,27 +33,21 @@ JOG_ROT_DEG = 15.0
 JOG_XY_MM = 5.0
 MAX_XY_MM = 120.0
 MAX_DOWN_MM = 30.0     # 보기 높이에서 이 이상 내려가지 않는다
-N_FRAMES = 10          # fasten_test 의 VISION_FRAMES 와 같게 — 화면 판정은 최근 N 장을 합친 값
+N_FRAMES = 10          # fasten_core 의 VISION_FRAMES 와 같게 — 화면 판정은 최근 N 장을 합친 값
 
 
 class Robot:
-    """slot_view 용 최소 로봇 제어 — fasten_test 의 상수 · TCP 설정을 그대로 쓴다."""
+    """slot_view 용 최소 로봇 제어 — fasten_core 의 상수 · TCP 설정을 그대로 쓴다."""
 
     def __init__(self, bolt_id, height):
         import rclpy
-        import DR_init
-        from cobot_robot import fasten_test as ft
+        from cobot_robot import fasten_core as ft
 
         self.ft = ft
         self.rclpy = rclpy
         rclpy.init()
         self.node = rclpy.create_node("slot_view", namespace=ft.ROBOT_ID)
-        # 클래스 안에서 DR_init.__dsr__id 라고 쓰면 파이썬이 _Robot__dsr__id 로 이름을 바꿔 버린다
-        # (name mangling) → setattr 로 정확한 이름에 넣는다.
-        setattr(DR_init, "__dsr__id", ft.ROBOT_ID)
-        setattr(DR_init, "__dsr__model", ft.ROBOT_MODEL)
-        setattr(DR_init, "__dsr__node", self.node)
-        import DSR_ROBOT2 as dr
+        dr = ft.connect_dsr(self.node)      # DR_init 설정(name mangling 회피)은 connect_dsr 안에서
         self.dr = dr
         log = self.node.get_logger()
 
@@ -131,7 +125,7 @@ def main():
 
     robot = None
     if opts.bolt:
-        from cobot_robot import fasten_test as ft
+        from cobot_robot import fasten_core as ft
         robot = Robot(opts.bolt, opts.height if opts.height is not None else ft.VIEW_H)
 
     cam = UdpCamera(unicast=True)

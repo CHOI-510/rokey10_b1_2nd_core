@@ -7,7 +7,8 @@ M0609 + RG2 가 쥔 일자 드라이버로 십자 홈 (장난감) 볼트를 조�
 
 | 파일 | 역할 |
 |---|---|
-| `cobot_robot/fasten_test.py` | 보정 · 체결 본체 (상수는 파일 맨 위) |
+| `cobot_robot/fasten_core.py` | 체결 루틴 · 상수 (CLI 와 `/fasten` Action 공용) — [튜닝] 값은 여기서 바꾼다 |
+| `cobot_robot/fasten_test.py` | 명령행 진입점 + 드라이버 건네기(그리퍼) |
 | `cobot_robot/slot_vision.py` | 십자 각도 · 중심 검출 (OpenCV, 가장 어두운 십자 덩어리 기준) |
 | `cobot_robot/udp_camera.py` | B-1 PC 가 보내는 RTP/JPEG UDP 영상 수신 |
 | `cobot_robot/slot_view.py` | 로봇 + 카메라로 검출만 실시간 확인 |
@@ -54,7 +55,7 @@ ros2 run cobot_robot fasten_test --bolt 1 --skip-grip
 
 ## 반드시 다시 잴 값 (2026-11-26 이 셋업 기준)
 
-`fasten_test.py` 맨 위:
+`fasten_core.py` 맨 위:
 - `BOLT_POSES_TAUGHT` — 볼트 좌표 (208.4 TCP · 스펀지 50 mm 위에서 티칭)
 - `DRIVER_TCP_MM = 369.8` — 플랜지 → 드라이버 끝
 - `DESK_Z = -27.1` — 책상 높이 (base 기준)
@@ -72,3 +73,9 @@ ros2 run cobot_robot fasten_test --bolt 1 --skip-grip
 
 - 힘 제어 중 목표 힘을 5 → 12 N 으로 바꿀 때 REL 기준 유지 여부
 - 중심 맞추기 자코비안 · 이동 방향의 실제 동작
+
+## ROS 2 `/fasten` Action 으로 실행
+
+`core_robot` 의 `robot_node` 를 `fasten_backend:=real` 로 띄우면 같은 루틴이 `/fasten` 으로 실행된다
+(`--skip-grip` 과 같은 조건, `recipe_id` 는 `finish` 만). 매핑 · 결과 · 남은 확인 항목: [docs/REAL_FASTEN.md](../docs/REAL_FASTEN.md).
+

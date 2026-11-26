@@ -15,6 +15,8 @@
 | /stow · Stow | item_id, TargetPose grasp_pose, holder_id | |
 | /fasten · Fasten | point_id, TargetPose bolt_pose, recipe_id (finish, confirm) | state, float64 peak_torque (N·m), float64 turns (회전수), tightening_valid, episode_id |
 
+`/fasten`은 기본적으로 Fake입니다. `fasten_backend:=real`이면 같은 Action 형식으로 실물 체결 루틴을 실행합니다. 실물에서 지원하는 recipe(`finish`만), point_id 매핑, Result 의미는 [실물 체결](REAL_FASTEN.md)을 참고합니다.
+
 Robot Node가 Action 공통 실행 슬롯을 관리합니다. 이미 실행 중이거나 이동 허가가 없을 때는 ROS Goal을 거절합니다. 거절된 Goal에는 Result가 발행되지 않습니다.
 
 ## Services
