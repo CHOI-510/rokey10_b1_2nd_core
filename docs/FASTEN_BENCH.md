@@ -10,15 +10,14 @@ M0609 + RG2 가 쥔 일자 드라이버로 십자 홈 (장난감) 볼트를 조�
 | `core_robot/core_robot/fastening/fasten_core.py` | 체결 루틴 · 상수 (CLI 와 `/fasten` Action 공용) — [튜닝] 값은 여기서 바꾼다 |
 | `core_robot/core_robot/fastening/fasten_test.py` | 명령행 진입점 + 드라이버 건네기(그리퍼) |
 | `core_robot/core_robot/fastening/slot_vision.py` | 십자 각도 · 중심 검출 (OpenCV, 가장 어두운 십자 덩어리 기준) |
-| `core_robot/core_robot/fastening/udp_camera.py` | B-1 PC 가 보내는 RTP/JPEG UDP 영상 수신 |
+| `core_robot/core_robot/fastening/ros_image_camera.py` | ROS 원본 Image 구독 |
 | `core_robot/core_robot/fastening/slot_view.py` | 로봇 + 카메라로 검출만 실시간 확인 |
 
 ## 필요한 것
 
 - 하드웨어 오버레이에 `doosan-robot2` (DSR_ROBOT2), `m0609_rg2_bringup`, `cobot2/robot_control` (그리퍼 `robot_control.onrobot` — `--skip-grip` 만 쓰면 불필요)
-- `python3-opencv`, `python3-numpy`, `python3-gi` (GStreamer 1.0)
-- 카메라 송신: B-1 PC 에서 `python3 -m core_common.camera_udp_h264 send --unicast-to <받는 PC IP>` (포트 6000)
-  - 받는 PC 의 `camera_udp_h264.py view` 창은 닫는다 (같은 포트)
+- `python3-opencv`, `python3-numpy`, ROS Jazzy의 `cv_bridge`
+- 카메라의 원본 ROS Image가 기본 `/camera/camera/color/image_raw`에 발행되어야 합니다. 기존 발행 이름이 다르면 진단 명령에 `--camera-topic`을 지정합니다.
 
 빌드는 [CORE 설치 절차](../README.md#설치-및-빌드)를 따릅니다. ROS 원본 영상은 [카메라 입력 예제](REAL_FASTEN.md)를 확인하세요.
 
@@ -71,5 +70,5 @@ ros2 run core_robot fasten_test --bolt 1 --skip-grip
 
 ## ROS 2 `/fasten` Action 으로 실행
 
-`core_robot` 의 `robot_node` 를 `fasten_backend:=real` 로 띄우면 같은 루틴이 `/fasten` 으로 실행된다
+`core_robot` 의 `robot_node` 를 `mode:=real` 로 띄우면 같은 루틴이 `/fasten` 으로 실행된다
 (`--skip-grip` 과 같은 조건, `recipe_id` 는 `finish` 만). 매핑 · 결과 · 남은 확인 항목: [실물 체결 문서](REAL_FASTEN.md).

@@ -7,12 +7,13 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
+from core_common import topics
 from .bolt_rgb import validate
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--topic', default='/camera/camera/color/image_raw')
+    parser.add_argument('--topic', default=topics.CAMERA_COLOR)
     parser.add_argument('--output', default='~/.config/core_vision/vision1.json')
     parser.add_argument('--radius', type=int, default=35)
     args = parser.parse_args()

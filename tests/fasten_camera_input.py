@@ -20,14 +20,16 @@ from sensor_msgs.msg import Image
 
 from core_robot.fastening import fasten_core, slot_vision
 from core_robot.fastening.fasten_test import ros_camera_factory
+from core_common import topics
 from core_common.errors import ErrorCode as Error
 from core_interfaces.action import Fasten
+from core_interfaces.msg import ControlStatus
 from core_robot.real_fasten import RealFasten
 from core_robot.robot_node import RobotNode
 from real_fasten_contract import SimDR
 
 
-TOPIC = '/camera/camera/color/image_raw'
+TOPIC = topics.CAMERA_COLOR
 
 
 @contextmanager
@@ -59,12 +61,8 @@ def reply(future, timeout=12):
     return future.result()
 
 
-def act(client, probe):
-    goal = Fasten.Goal(task_id='camera-test', point_id='assembly_bolt', recipe_id='finish')
-    goal.bolt_pose.valid = True
-    goal.bolt_pose.pose.header.stamp = probe.get_clock().now().to_msg()
-    goal.bolt_pose.pose.header.frame_id = 'base_link'
-    goal.bolt_pose.pose.pose.orientation.w = 1.0
+def act(client):
+    goal = Fasten.Goal(task_id='camera-test', point_id='R', recipe_id='finish')
     feedback = []
     handle = reply(client.send_goal_async(
         goal, feedback_callback=lambda event: feedback.append(event.feedback.log_msg)))
@@ -80,12 +78,18 @@ def action_cases(data):
         assert kwargs['camera_topic'] == TOPIC
         original_init(instance, *args, dr=dr, dsr_available=lambda: True, **kwargs)
 
-    params = dict(fasten_backend='real', fasten_camera_topic=TOPIC,
-                  require_control_heartbeat=False, fasten_server_check_s=0.0, data_dir=data)
+    params = dict(mode='real', camera_topic=TOPIC, fasten_server_check_s=0.0, data_dir=data)
     with patch.object(RealFasten, '__init__', injected):
         robot = RobotNode(parameter_overrides=[Parameter(k, value=v) for k, v in params.items()])
     probe = rclpy.create_node('fasten_camera_probe')
     publisher = probe.create_publisher(Image, TOPIC, qos_profile_sensor_data)
+    status = probe.create_publisher(ControlStatus, topics.CONTROL_STATUS, 10)
+
+    def heartbeat():
+        status.publish(ControlStatus(stamp=probe.get_clock().now().to_msg(), mode='real',
+                                     control_id='camera-test-control', task_id='camera-test', state='FASTEN'))
+
+    probe.create_timer(0.05, heartbeat)
     condition = dict(kind='missing')
     calibration = dict(view_h=fasten_core.VIEW_H, view_offset_tool=list(fasten_core.VIEW_OFFSET_TOOL),
                        sponge_mm=fasten_core.SPONGE_MM, image_size=[2, 2],
@@ -105,14 +109,19 @@ def action_cases(data):
         publisher.publish(image)
 
     probe.create_timer(0.03, publish)
-    client = ActionClient(probe, Fasten, '/fasten')
+    client = ActionClient(probe, Fasten, topics.FASTEN)
     try:
-        with spin(robot, probe), patch.object(slot_vision, 'load_calib', return_value=calibration):
+        with (patch.object(RealFasten, 'services_ready', return_value=True),
+              patch.object(slot_vision, 'load_calib', return_value=calibration), spin(robot, probe)):
             assert client.wait_for_server(timeout_sec=5)
+            deadline = monotonic() + 5
+            while not robot.control_live():
+                assert monotonic() < deadline, 'control heartbeat not received'
+                sleep(0.01)
             for kind, reason in (('missing', 'no images received'), ('stale', 'no fresh images'),
                                  ('invalid', 'image decode failed')):
                 condition['kind'] = kind
-                handle, feedback = act(client, probe)
+                handle, feedback = act(client)
                 result = reply(handle.get_result_async()).result
                 assert result.error_code == Error.UNAVAILABLE and not dr.motions
                 deadline = monotonic() + 1
@@ -122,12 +131,12 @@ def action_cases(data):
                 assert not any(sub.topic_name == TOPIC for sub in robot.subscriptions)
 
             condition['kind'] = 'missing'
-            handle, _ = act(client, probe)
+            handle, _ = act(client)
             reply(handle.cancel_goal_async())
             assert reply(handle.get_result_async()).result.error_code == Error.CANCELLED
             assert not dr.motions
             assert not any(sub.topic_name == TOPIC for sub in robot.subscriptions)
-            handle, _ = act(client, probe)
+            handle, _ = act(client)
             deadline = monotonic() + 2
             while not any(sub.topic_name == TOPIC for sub in robot.subscriptions):
                 assert monotonic() < deadline, 'camera subscription not created'
@@ -148,7 +157,7 @@ def action_cases(data):
                 return fasten_core.RESULT_DONE
 
             with patch.object(fasten_core.Fastener, 'run', simulated_run):
-                handle, _ = act(client, probe)
+                handle, _ = act(client)
                 assert reply(handle.get_result_async()).result.success
             assert dr.motions
             assert not any(sub.topic_name == TOPIC for sub in robot.subscriptions)
@@ -193,21 +202,19 @@ def standalone_cases():
     finally:
         probe.destroy_node()
 
-    with patch('core_robot.fastening.udp_camera.UdpCamera') as udp:
-        udp.return_value.latest.return_value = object()
-        fastener = fasten_core.Fastener(SimDR(), rclpy.logging.get_logger('udp_fallback'), 1,
-                                        calib_vision=True)
-        fastener.close()
-        udp.assert_called_once_with(port=fasten_core.CAM_PORT, unicast=True)
-        udp.return_value.close.assert_called_once()
-    print('PASS standalone CLI executor rejects pre-motion samples, empty input selects UDP')
+    try:
+        fasten_core.Fastener(SimDR(), rclpy.logging.get_logger('missing_camera'), 1,
+                             calib_vision=True)
+    except fasten_core.Abort as exc:
+        assert 'ROS Image subscriber' in str(exc)
+    else:
+        raise AssertionError('vision started without a ROS subscriber')
+    print('PASS CLI executor rejects pre-motion frames and vision requires a ROS subscriber')
 
 
-def launch_case(data, topic):
+def launch_case(data):
     command = ['ros2', 'launch', 'core_bringup', 'system.launch.py',
-               'mode:=fake', f'data_dir:={data}']
-    if topic:
-        command.append(f'fasten_camera_topic:={topic}')
+               'mode:=fake', f'camera_topic:={TOPIC}', f'data_dir:={data}']
     with (Path(data) / 'launch.log').open('w+') as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
         probe = rclpy.create_node('fasten_launch_probe')
@@ -216,9 +223,11 @@ def launch_case(data, topic):
             with spin(probe):
                 assert client.wait_for_service(timeout_sec=10)
                 response = reply(client.call_async(GetParameters.Request(
-                    names=['fasten_camera_topic'])))
-                assert response.values[0].type == Parameter.Type.STRING.value
-                assert response.values[0].string_value == topic
+                    names=['mode', 'camera_topic'])))
+                assert response.values[0].string_value == 'fake'
+                assert response.values[1].type == Parameter.Type.NOT_SET.value
+                assert not any(item.node_name == 'robot_node' for item in
+                               probe.get_subscriptions_info_by_topic(TOPIC))
         except Exception:
             log.seek(0)
             print(log.read())
@@ -227,7 +236,7 @@ def launch_case(data, topic):
             probe.destroy_node()
             process.send_signal(signal.SIGINT)
             process.wait(timeout=10)
-    print(f"PASS launch parameter {topic or '(empty)'}")
+    print('PASS fake launch does not configure or subscribe to the real camera')
 
 
 if __name__ == '__main__':
@@ -237,7 +246,6 @@ if __name__ == '__main__':
         try:
             action_cases(directory)
             standalone_cases()
-            launch_case(directory, TOPIC)
-            launch_case(directory, '')
+            launch_case(directory)
         finally:
             rclpy.try_shutdown()

@@ -7,6 +7,7 @@ from core_common.config import SCENARIOS
 from core_common.errors import ErrorCode as Error
 from core_common.robot_setup import require_fake
 from core_common.types import Presence, Side
+from core_common import topics
 from core_interfaces.srv import Inspect, Locate
 
 from .inspect import inspect
@@ -20,8 +21,8 @@ class VisionNode(Node):
         self.scenario = self.declare_parameter('scenario', 'missing').value
         if self.scenario not in SCENARIOS:
             raise ValueError(f'Unknown scenario {self.scenario}')
-        self.create_service(Inspect, '/inspect', self.inspect)
-        self.create_service(Locate, '/locate', self.locate)
+        self.create_service(Inspect, topics.INSPECT, self.inspect)
+        self.create_service(Locate, topics.LOCATE, self.locate)
 
     def inspect(self, request, response):
         response.presence, response.side = Presence.UNKNOWN, Side.UNKNOWN

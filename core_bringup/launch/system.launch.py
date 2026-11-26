@@ -9,6 +9,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+from core_common import topics
 from core_common.config import SCENARIOS
 
 
@@ -23,37 +24,31 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('mode', default_value='fake', choices=['fake', 'inspection', 'real']),
         DeclareLaunchArgument('scenario', default_value='missing', choices=list(SCENARIOS)),
-        # /fasten backend: fake (default) or real (bench fastening routine on the M0609, needs Doosan bringup)
-        DeclareLaunchArgument('fasten_backend', default_value='fake', choices=['fake', 'real']),
-        DeclareLaunchArgument('fasten_camera_topic', default_value='',
-                              description='Raw sensor_msgs/Image for real /fasten. Empty uses UDP.'),
-        DeclareLaunchArgument('camera_topic', default_value='/camera/camera/color/image_raw',
+        DeclareLaunchArgument('camera_topic', default_value=topics.CAMERA_COLOR,
                               description='Raw wrist Image for real cycle and default Vision 1 input.'),
         DeclareLaunchArgument('vision_camera_topic', default_value=camera,
                               description='Raw image showing both bolts at the calibrated inspection pose.'),
         DeclareLaunchArgument('vision_roi_file', default_value='~/.config/core_vision/vision1.json'),
-        DeclareLaunchArgument('dsr_stop_service', default_value='/dsr01/dsr_controller2/motion/move_stop'),
+        DeclareLaunchArgument('dsr_stop_service', default_value=topics.DSR_MOVE_STOP),
         DeclareLaunchArgument('data_dir', default_value='data'),
         DeclareLaunchArgument('voice', default_value='false'),
         DeclareLaunchArgument('llm', default_value='false'),
         DeclareLaunchArgument('gui', default_value='false'),
-        DeclareLaunchArgument('preview_enabled', default_value='true'),
+        DeclareLaunchArgument('preview_enabled', default_value=PythonExpression([
+            "'false' if '", mode, "' == 'fake' else 'true'"])),
         DeclareLaunchArgument('wrist_image_type', default_value='raw', choices=['raw', 'compressed']),
         DeclareLaunchArgument('side_image_type', default_value='raw', choices=['raw', 'compressed']),
-        DeclareLaunchArgument('wrist_image_topic', default_value=PythonExpression([
-            "'", camera, "' if '", mode, "' == 'real' else '/camera/color/image_raw'"])),
+        DeclareLaunchArgument('wrist_image_topic', default_value=camera),
         DeclareLaunchArgument('side_image_topic', default_value=''),
         DeclareLaunchArgument('wrench_topic', default_value=''),
         Node(package='core_robot', executable='robot_node', name='robot_node', output='screen',
              condition=fake, parameters=[str(config / 'robot.yaml'), base, {
-                 'scenario': scenario, 'fasten_backend': LaunchConfiguration('fasten_backend'),
-                 'fasten_camera_topic': ParameterValue(
-                     LaunchConfiguration('fasten_camera_topic'), value_type=str)}]),
+                 'scenario': scenario}]),
         Node(package='core_vision', executable='vision_node', name='vision_node', output='screen',
              condition=fake, parameters=[{'mode': mode, 'scenario': scenario}]),
         Node(package='core_robot', executable='robot_node', name='robot_node', output='screen',
              condition=real, parameters=[str(config / 'robot.yaml'), base, {
-                 'fasten_backend': 'real', 'fasten_camera_topic': ParameterValue(camera, value_type=str),
+                 'camera_topic': ParameterValue(camera, value_type=str),
                  'dsr_stop_service': ParameterValue(LaunchConfiguration('dsr_stop_service'), value_type=str),
              }]),
         Node(package='core_vision', executable='vision1_node', name='vision1_node', output='screen',

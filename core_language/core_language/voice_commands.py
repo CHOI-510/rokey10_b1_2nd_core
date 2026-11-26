@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+from core_common import topics
 from core_interfaces.srv import EmergencyStop, JobCommand, ParseCommand
 
 from .prompts import ALLOWED_COMMANDS
@@ -9,10 +10,10 @@ from .prompts import ALLOWED_COMMANDS
 
 class VoiceCommands:
     def __init__(self, node):
-        self.parse = node.create_client(ParseCommand, '/parse_command')
-        self.jobs = node.create_client(JobCommand, '/job_command')
-        self.stop = node.create_client(EmergencyStop, '/emergency_stop')
-        self.robot_stop = node.create_client(EmergencyStop, '/robot/emergency_stop')
+        self.parse = node.create_client(ParseCommand, topics.PARSE_COMMAND)
+        self.jobs = node.create_client(JobCommand, topics.JOB_COMMAND)
+        self.stop = node.create_client(EmergencyStop, topics.EMERGENCY_STOP)
+        self.robot_stop = node.create_client(EmergencyStop, topics.ROBOT_EMERGENCY_STOP)
 
     def interpret(self, transcript):
         """The caller must apply a bounded wait and give a local failure prompt."""

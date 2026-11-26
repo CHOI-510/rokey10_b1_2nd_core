@@ -1,6 +1,6 @@
 """Real /fasten backend: runs core_robot.fastening.fasten_core on the Doosan M0609.
 
-Selected with robot_node parameter ``fasten_backend:=real``. The routine runs under the same
+Selected by ``mode:=real``. The routine runs under the same
 conditions as ``ros2 run core_robot fasten_test --skip-grip``: the robot already holds the
 screwdriver and keeps holding it; no hand-over and no gripper open/close.
 
@@ -27,6 +27,7 @@ Result mapping
   peak_torque = max |tau6 - tau6 just before tightening| in N·m (0.0 when never measured)
   turns       = counted tool rotation / 360 (seat search + tightening)
 """
+from core_common import topics
 from core_common.errors import ErrorCode as Error
 from core_common.types import Fastening
 
@@ -55,14 +56,14 @@ def parse_point_map(entries, taught):
 
 class RealFasten:
     def __init__(self, node, point_map, vision=True, stop_service='', dr=None,
-                 dsr_available=None, core=None, camera_topic=''):
+                 dsr_available=None, core=None, camera_topic=None):
         if core is None:
             from .fastening import fasten_core as core
         self.core = core
         self.log = node.get_logger()
         self.point_map = parse_point_map(point_map, core.BOLT_POSES_TAUGHT)
         self.vision = vision
-        self.camera_topic = camera_topic
+        self.camera_topic = topics.CAMERA_COLOR if vision and camera_topic is None else camera_topic
         self.node = node
         self.fastener = None
         self.last_log = ''
@@ -76,7 +77,7 @@ class RealFasten:
             self.dsr_node = rclpy.create_node('core_robot_dsr', namespace=core.ROBOT_ID)
             self.dr = core.connect_dsr(self.dsr_node)
             self._mode_client = self.dsr_node.create_client(
-                SetRobotMode, '/' + core.ROBOT_ID + '/dsr_controller2/system/set_robot_mode')
+                SetRobotMode, topics.DSR_SET_ROBOT_MODE)
             if stop_service:
                 self.stop_client = node.create_client(MoveStop, stop_service)
         else:
@@ -84,7 +85,7 @@ class RealFasten:
             self.dr = dr
             self._mode_client = None
         self.log.info(f'real fasten backend: points {self.point_map}, vision {vision}, '
-                      f'camera {camera_topic or "UDP"}, stop service {stop_service or "none"}')
+                      f'camera {self.camera_topic or "disabled"}, stop service {stop_service or "none"}')
 
     @property
     def force_active(self):
@@ -140,13 +141,13 @@ class RealFasten:
             return (Error.CANCELLED if pending == 'cancelled' else Error.STOPPED), 'before_motion'
         if not self.controller_ready():
             return Error.UNAVAILABLE, 'dsr_controller_unavailable'
-        if self.camera_topic and not self.vision:
-            return Error.INVALID, 'ros_camera_requires_fasten_vision'
-        notify('PREPARE', f'bolt{bolt}: camera / calibration check ({self.camera_topic or "UDP"})')
+        if bool(self.camera_topic) != self.vision:
+            return Error.INVALID, 'ros_camera_and_vision_must_agree'
+        notify('PREPARE', f'bolt{bolt}: camera / calibration check ({self.camera_topic or "disabled"})')
         try:
             fastener = core.Fastener(self.dr, self.log, bolt, vision=self.vision,
                                      should_abort=should_abort, on_stage=notify, log_kind='action',
-                                     camera_factory=self.ros_camera if self.camera_topic else None)
+                                     camera_factory=self.ros_camera if self.vision else None)
         except core.Interrupted as exc:
             return (Error.CANCELLED if exc.kind == 'cancelled' else Error.STOPPED), exc.kind
         except core.Abort as exc:

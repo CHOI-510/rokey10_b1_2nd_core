@@ -14,18 +14,15 @@
      e. J6 한계 → 힘 해제, 보기 높이로 상승, J6 를 90° 배수 되감기 → a 로.
   4. 힘 해제 → 보기 높이 → 대기 자세. 결과 출력, CSV · 영상 로그 저장.
 
-실행 (터미널 1: s → sodreal 또는 sodvir,  B-1 PC: camera_udp_h264.py send --codec jpeg --unicast-to <노트북 IP>)
+실행 (Doosan 브링업과 ROS Image 발행기 실행 후)
   ros2 run core_robot fasten_test --bolt 1 --calib-vision   # 드라이버를 쥘 때마다 1회: ROI · 기준각 · 방향 저장
   ros2 run core_robot fasten_test --bolt 1                  # 체결
   ros2 run core_robot fasten_test --bolt 1 --no-vision      # 비전 없이 (홈 찾기 회전만)
   ros2 run core_robot fasten_test --bolt 1 --sim --no-vision  # 가상: 힘 제어·그리퍼·비전 없이 순서만
   ros2 run core_robot slot_view                             # 로봇 없이 홈 각도 검출만 실시간 확인
 
-카메라가 이 PC 에 직접 꽂혀 있으면 (realsense2_camera 실행 중) 모든 명령에 --camera-topic 을 붙인다.
-  ros2 run core_robot fasten_test --bolt 1 --calib-vision --camera-topic /camera/camera/color/image_raw
-  ros2 run core_robot slot_view --camera-topic /camera/camera/color/image_raw
-보정 파일에는 영상 해상도가 기록된다. 체결 때 해상도가 다르면(UDP 1280x720 ↔ 직결 토픽 등) 멈추므로
-입력을 바꿨으면 --calib-vision 을 다시 돌린다.
+기본 영상은 core_common.topics.CAMERA_COLOR를 구독한다. 다른 토픽은 --camera-topic으로 지정한다.
+영상 입력이나 해상도가 바뀌면 같은 영상 입력으로 --calib-vision을 다시 수행한다.
 
 좌표는 모두 로봇 base 기준(mm, deg). 책상은 base z = -27.1.
 상수 · 체결 루틴은 fasten_core.py 에 있다 (ROS 2 /fasten Action 과 공용). 이 파일은 명령행 진입점과
@@ -38,6 +35,8 @@ import time
 from contextlib import ExitStack
 
 import rclpy
+
+from core_common import topics
 
 from .fasten_core import (BOLT_POSES_TAUGHT, GRIP_FORCE, GRIPPER_NAME, RESULT_DONE,
                                      RESULT_SIM_DONE, ROBOT_ID, TOOLCHARGER_IP, TOOLCHARGER_PORT,
@@ -62,7 +61,7 @@ def handover(log):
 
 
 def ros_camera_factory(topic):
-    """cv_bridge 는 --camera-topic 일 때만 import 한다 (구현은 ros_image_camera.py)."""
+    """비전 입력을 사용할 때만 cv_bridge를 import한다 (구현은 ros_image_camera.py)."""
     from .ros_image_camera import ros_camera_factory as factory
     return factory(topic)
 
@@ -76,13 +75,16 @@ def main(args=None):
     ap.add_argument("--no-vision", action="store_true", help="비전 정렬 없이 홈 찾기 회전만")
     ap.add_argument("--calib-vision", action="store_true",
                     help="비전 보정만 (ROI · 기준각 · 방향 저장). 드라이버를 다시 쥘 때마다 실행")
-    ap.add_argument("--camera-topic", default="", help="ROS 원본 Image 토픽. 생략하면 기존 UDP 입력")
+    ap.add_argument("--camera-topic", default=None, help=f"ROS 원본 Image 토픽 (기본 {topics.CAMERA_COLOR})")
     opts = ap.parse_args(argv)
     if opts.calib_vision and (opts.no_vision or opts.sim):
         ap.error("--calib-vision 은 --no-vision / --sim 과 같이 쓸 수 없음")
 
-    if opts.camera_topic and (opts.no_vision or opts.sim):
-        ap.error("--camera-topic 은 --no-vision / --sim 과 같이 쓸 수 없음")
+    if opts.camera_topic is not None and (not opts.camera_topic or opts.no_vision or opts.sim):
+        ap.error("--camera-topic에는 토픽 이름이 필요하고 --no-vision / --sim과 같이 쓸 수 없음")
+
+    if not (opts.no_vision or opts.sim):
+        opts.camera_topic = opts.camera_topic or topics.CAMERA_COLOR
 
     rclpy.init(args=args)
     node = rclpy.create_node("fasten_test", namespace=ROBOT_ID)

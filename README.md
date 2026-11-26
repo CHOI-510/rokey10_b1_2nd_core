@@ -25,7 +25,7 @@ Ubuntu 24.04에서 ROS 2 Jazzy와 Cyclone DDS를 사용합니다. Jazzy apt 저�
 ```bash
 sudo apt install ros-jazzy-ros-base ros-jazzy-rmw-cyclonedds-cpp \
   ros-jazzy-rosidl-default-generators ros-jazzy-sensor-msgs ros-jazzy-geometry-msgs ros-jazzy-cv-bridge \
-  python3-colcon-common-extensions python3-tk python3-pil python3-numpy python3-opencv python3-gi
+  python3-colcon-common-extensions python3-tk python3-pil python3-numpy python3-opencv
 mkdir -p ~/cobot2_ws/src
 git clone -b main https://github.com/CHOI-510/rokey10_b1_2nd_core.git ~/cobot2_ws/src/core_project
 ```
@@ -100,9 +100,9 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 3. WORKER DONE을 누릅니다. 재검사와 체결을 마치면 화면에 PASS가 표시되고 관제는 READY로 돌아갑니다.
 4. 결과 카드와 이벤트 로그에서 같은 작업의 상단 판정, 체결 판정, 최종 결과를 확인합니다.
 
-기본 Fake 실행에는 영상·Wrench 발행기가 없습니다. 손목 카메라의 기본 토픽은 `/camera/color/image_raw`이며 화면에는 NO SIGNAL이 표시됩니다. 측면 카메라는 토픽을 비워 OFF로 표시하고 체결 패널은 N/A로 표시합니다. 외부 발행기를 연결할 때는 Launch 인자 `wrist_image_topic`, `side_image_topic`, `wrench_topic`을 사용합니다. 구독 형식, 신호 표시와 MOCK의 의미는 [통신 계약](docs/INTERFACES.md#관리자-gui)을 참고합니다.
+Fake 실행은 GUI 영상 구독을 기본으로 끕니다. 미리보기를 시험할 때는 `preview_enabled:=true`를 사용합니다. 실물에서는 손목 미리보기, Vision 1과 체결이 `core_common.topics.CAMERA_COLOR`의 원본 영상을 기본으로 구독합니다.
 
-JPEG Preview와 기존 UDP 송수신 실행법은 [영상 파이프라인](docs/VIDEO_PIPELINE.md)에 있습니다. 공통 인터페이스가 바뀌었으므로 관제·Robot·GUI·언어 및 외부 소비자는 같은 변경본을 빌드해야 합니다. [팀 재빌드](docs/DEVELOPMENT.md#안정화-변경과-팀-재빌드)
+기본 영상은 `/camera/camera/color/image_raw`입니다. 다른 이름으로 발행 중이면 Launch의 `camera_topic`만 지정합니다. 선택 입력과 DDS 확인 방법은 [영상 입력](docs/VIDEO_PIPELINE.md)을 참고하세요. 공통 인터페이스가 바뀌었으므로 관제·Robot·GUI·언어 및 외부 소비자는 같은 변경본을 빌드해야 합니다. [팀 재빌드](docs/DEVELOPMENT.md#안정화-변경과-팀-재빌드)
 
 ## 통합 테스트
 
@@ -111,7 +111,6 @@ JPEG Preview와 기존 UDP 송수신 실행법은 [영상 파이프라인](docs/
 ```bash
 python3 tests/fake_integration.py
 python3 tests/stability_integration.py
-python3 tests/video_pipeline.py
 # 그래픽 디스플레이가 있는 터미널에서 실행
 python3 tests/monitor_integration.py
 ```
@@ -127,8 +126,7 @@ python3 tests/monitor_integration.py
 Doosan 브링업과 RealSense를 실행하고, 같은 ROS Domain에서 CORE를 시작합니다.
 
 ```bash
-ros2 launch core_bringup system.launch.py mode:=real gui:=true \
-  camera_topic:=/camera/camera/color/image_raw
+ros2 launch core_bringup system.launch.py mode:=real gui:=true
 ```
 
 이 실행은 관제, Vision 1, 실물 `/fasten` 서버, GUI를 함께 띄웁니다. GUI의 `CHECK`가 실물 L/R 존재 검사를 시작합니다. 준비한 볼트가 빠져 있으면 `WORKER DONE`을 기다린 뒤 다시 검사합니다. 실물 체결 L→R이 각각 계측 성공을 반환하고, 작업 후 신선한 영상에서 두 볼트가 확인되면 PASS입니다.

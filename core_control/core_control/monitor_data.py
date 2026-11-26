@@ -14,6 +14,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
+from core_common import topics
 from core_common.status_qos import SNAPSHOT_QOS, current_stamp
 
 from core_interfaces.msg import ControlStatus, LogEvent, RobotStatus, TaskResult
@@ -38,10 +39,10 @@ class MonitorNode(Node):
         if self.mode not in ('FAKE', 'REAL', 'INSPECTION'):
             raise ValueError('mode must be fake, real or inspection')
         self.cameras = {
-            'wrist': self.declare_parameter('wrist_image_topic', '/camera/color/image_raw').value,
+            'wrist': self.declare_parameter('wrist_image_topic', topics.CAMERA_COLOR).value,
             'side': self.declare_parameter('side_image_topic', '').value,
         }
-        self.preview_enabled = self.declare_parameter('preview_enabled', True).value
+        self.preview_enabled = self.declare_parameter('preview_enabled', self.mode != 'FAKE').value
         if not self.preview_enabled:
             self.cameras = dict.fromkeys(self.cameras, '')
         self.image_types = {
@@ -80,13 +81,13 @@ class MonitorNode(Node):
         self.status_timeout = self.declare_parameter('status_timeout', 1.0).value
         if not isfinite(self.status_timeout) or self.status_timeout <= 0:
             raise ValueError('status_timeout must be finite and positive')
-        self.job = self.create_client(JobCommand, '/job_command')
-        self.stop = self.create_client(EmergencyStop, '/emergency_stop')
-        self.robot_stop = self.create_client(EmergencyStop, '/robot/emergency_stop')
-        self.create_subscription(ControlStatus, '/control_status', self.receive_control, SNAPSHOT_QOS)
-        self.create_subscription(RobotStatus, '/robot_status', self.receive_robot, 10)
-        self.create_subscription(LogEvent, '/event_log', self.receive_log, 100)
-        self.create_subscription(TaskResult, '/task_result', self.receive_result, SNAPSHOT_QOS)
+        self.job = self.create_client(JobCommand, topics.JOB_COMMAND)
+        self.stop = self.create_client(EmergencyStop, topics.EMERGENCY_STOP)
+        self.robot_stop = self.create_client(EmergencyStop, topics.ROBOT_EMERGENCY_STOP)
+        self.create_subscription(ControlStatus, topics.CONTROL_STATUS, self.receive_control, SNAPSHOT_QOS)
+        self.create_subscription(RobotStatus, topics.ROBOT_STATUS, self.receive_robot, 10)
+        self.create_subscription(LogEvent, topics.EVENT_LOG, self.receive_log, 100)
+        self.create_subscription(TaskResult, topics.TASK_RESULT, self.receive_result, SNAPSHOT_QOS)
         for camera, topic in self.cameras.items():
             if topic:
                 self.create_subscription(

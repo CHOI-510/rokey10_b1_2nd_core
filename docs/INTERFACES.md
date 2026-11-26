@@ -15,7 +15,7 @@
 | /stow · Stow | item_id, TargetPose grasp_pose, holder_id | |
 | /fasten · Fasten | point_id, TargetPose bolt_pose, recipe_id (finish, confirm) | state, float64 peak_torque (N·m), float64 turns (회전수), tightening_valid, episode_id |
 
-`/fasten`은 기본적으로 Fake입니다. `fasten_backend:=real`이면 같은 Action 형식으로 실물 체결 루틴을 실행합니다. 실물에서 지원하는 recipe(`finish`만), point_id 매핑, Result 의미는 [실물 체결](REAL_FASTEN.md)을 참고합니다.
+`/fasten`은 `mode:=fake`에서 모의 체결을, `mode:=real`에서 실물 체결을 실행합니다. 실물에서 지원하는 recipe(`finish`만), point_id 매핑, Result 의미는 [실물 체결](REAL_FASTEN.md)을 참고합니다.
 
 Robot Node가 Action 공통 실행 슬롯을 관리합니다. 이미 실행 중이거나 이동 허가가 없을 때는 ROS Goal을 거절합니다. 거절된 Goal에는 Result가 발행되지 않습니다.
 
@@ -96,7 +96,7 @@ Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용�
 
 | 용도 | 파라미터 | 기본값 | 표준 메시지 |
 |---|---|---|---|
-| 손목 영상 | `wrist_image_topic`, `wrist_image_type` | `/camera/color/image_raw`, `raw` | Image 또는 CompressedImage |
+| 손목 영상 | `wrist_image_topic`, `wrist_image_type` | `/camera/camera/color/image_raw`, `raw` | Image 또는 CompressedImage |
 | 측면 영상 | `side_image_topic`, `side_image_type` | 빈 문자열, `raw` | Image 또는 CompressedImage |
 | 체결 중 힘·모멘트 | `wrench_topic` | 빈 문자열 | `geometry_msgs/msg/WrenchStamped` |
 

@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 
+from core_common import topics
 from core_common.ros_context import ros_context
 from core_interfaces.srv import EmergencyStop, JobCommand
 
@@ -16,7 +17,7 @@ def main():
         node = Node('job_cli')
         try:
             stop = args.command == 'stop'
-            interface, name = (EmergencyStop, '/emergency_stop') if stop else (JobCommand, '/job_command')
+            interface, name = (EmergencyStop, topics.EMERGENCY_STOP) if stop else (JobCommand, topics.JOB_COMMAND)
             client = node.create_client(interface, name)
             if not client.wait_for_service(timeout_sec=3):
                 parser.exit(1, f'{name} unavailable\n')

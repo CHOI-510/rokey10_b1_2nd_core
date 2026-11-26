@@ -12,6 +12,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
+from core_common import topics
 from core_common.errors import ErrorCode
 from .bolt_rgb import classify, validate, consensus
 
@@ -26,7 +27,7 @@ class Vision1(Node):
         from core_interfaces.srv import InspectPositions
         if 'presence_r' not in InspectPositions.Response.get_fields_and_field_types():
             raise RuntimeError('Latest L/R InspectPositions interface required')
-        self.declare_parameter('camera_topic', '/camera/camera/color/image_raw')
+        self.declare_parameter('camera_topic', topics.CAMERA_COLOR)
         self.declare_parameter('roi_file', '~/.config/core_vision/vision1.json')
         self.declare_parameter('wait_seconds', 1.0)
         self.declare_parameter('max_age_seconds', 0.5)
@@ -38,7 +39,7 @@ class Vision1(Node):
         self.service_group = MutuallyExclusiveCallbackGroup()
         self.create_subscription(Image, self.param('camera_topic'), self.receive,
                                  qos_profile_sensor_data, callback_group=self.image_group)
-        self.create_service(InspectPositions, '/integration/inspect_positions', self.inspect,
+        self.create_service(InspectPositions, topics.INSPECT_POSITIONS, self.inspect,
                             callback_group=self.service_group)
 
     def param(self, name):

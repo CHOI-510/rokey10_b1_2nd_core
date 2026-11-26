@@ -11,6 +11,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rosidl_runtime_py.convert import message_to_ordereddict
 
+from core_common import topics
 from core_common.announcements import result_text
 from core_common.config import data_directory
 from core_common.errors import ErrorCode as Error
@@ -26,7 +27,12 @@ from core_interfaces.srv import EmergencyStop, Inspect, InspectPositions, JobCom
 from .task_assembly import AssemblyTask, InspectionTask, RealAssemblyTask, TaskEnded, position_fields
 
 
-ACTIONS = {MoveTo: 'move_to', Fetch: 'fetch', Stow: 'stow', Fasten: 'fasten'}
+ACTIONS = {
+    MoveTo: (topics.MOVE_TO, 'move_to'),
+    Fetch: (topics.FETCH, 'fetch'),
+    Stow: (topics.STOW, 'stow'),
+    Fasten: (topics.FASTEN, 'fasten'),
+}
 SOURCES = {'gui', 'cli', 'voice'}
 TERMINAL = {GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_ABORTED, GoalStatus.STATUS_CANCELED}
 
@@ -86,23 +92,23 @@ class Control(Node):
         self.stop_reassert = False
         self.uncertain_action = False
         if self.inspection_only:
-            services = ((InspectPositions, '/integration/inspect_positions'),
-                        (ReadFastening, '/integration/read_fastening'))
+            services = ((InspectPositions, topics.INSPECT_POSITIONS),
+                        (ReadFastening, topics.READ_FASTENING))
             self.actions = {}
         else:
-            vision = ((InspectPositions, '/integration/inspect_positions'),) if self.real_cycle else (
-                (Inspect, '/inspect'), (Locate, '/locate'))
-            services = (*vision, (EmergencyStop, '/robot/emergency_stop'))
+            vision = ((InspectPositions, topics.INSPECT_POSITIONS),) if self.real_cycle else (
+                (Inspect, topics.INSPECT), (Locate, topics.LOCATE))
+            services = (*vision, (EmergencyStop, topics.ROBOT_EMERGENCY_STOP))
             actions = {Fasten: ACTIONS[Fasten]} if self.real_cycle else ACTIONS
-            self.actions = {kind: ActionClient(self, kind, '/' + name) for kind, name in actions}
-            self.create_subscription(RobotStatus, '/robot_status', self.receive_status, 10)
+            self.actions = {kind: ActionClient(self, kind, name) for kind, name in actions}
+            self.create_subscription(RobotStatus, topics.ROBOT_STATUS, self.receive_status, 10)
         self.service_clients = {kind: self.create_client(kind, name) for kind, name in services}
-        self.create_service(JobCommand, '/job_command', self.command)
-        self.create_service(EmergencyStop, '/emergency_stop', self.emergency_stop)
-        self.status = self.create_publisher(ControlStatus, '/control_status', SNAPSHOT_QOS)
-        self.logs = self.create_publisher(LogEvent, '/event_log', 100)
-        self.results = self.create_publisher(TaskResult, '/task_result', SNAPSHOT_QOS)
-        self.announcements = self.create_publisher(Announcement, '/announce', 10)
+        self.create_service(JobCommand, topics.JOB_COMMAND, self.command)
+        self.create_service(EmergencyStop, topics.EMERGENCY_STOP, self.emergency_stop)
+        self.status = self.create_publisher(ControlStatus, topics.CONTROL_STATUS, SNAPSHOT_QOS)
+        self.logs = self.create_publisher(LogEvent, topics.EVENT_LOG, 100)
+        self.results = self.create_publisher(TaskResult, topics.TASK_RESULT, SNAPSHOT_QOS)
+        self.announcements = self.create_publisher(Announcement, topics.ANNOUNCE, 10)
         self.journal = Journal(self.data, self.get_logger().error)
         self.create_timer(heartbeat_period, self.tick)
 
@@ -113,7 +119,7 @@ class Control(Node):
         with self.lock:
             if not current_stamp(self, message.stamp, self.limits['robot_heartbeat']):
                 return
-            if self.real_cycle and message.robot_mode != 'real+real_fasten':
+            if message.robot_mode != self.mode:
                 return
             previous = self.robot_status
             self.robot_status = message
@@ -490,7 +496,7 @@ class Control(Node):
             task.last_goal_id = bytes(handle.goal_id.uuid).hex()
             result = handle.get_result_async()
             progress['advanced'] = progress['received'] = monotonic()
-            self.wait_for(task, result.done, self.limits[ACTIONS[kind]], 'robot_action_timeout', progress)
+            self.wait_for(task, result.done, self.limits[ACTIONS[kind][1]], 'robot_action_timeout', progress)
             reply = result.result()
             if kind is Fasten:
                 task.capture_fastening(reply.result)

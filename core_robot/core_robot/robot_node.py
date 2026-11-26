@@ -19,6 +19,7 @@ from core_common.reporter import Journal, feedback
 from core_common.robot_setup import require_fake
 from core_common.status_qos import current_stamp, time_ns
 from core_common.types import Fastening, State
+from core_common import topics
 from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
 from core_interfaces.msg import ControlStatus, RobotStatus, TargetPose
 from core_interfaces.srv import EmergencyStop
@@ -44,18 +45,6 @@ class RobotNode(Node):
         self.require_heartbeat = self.declare_parameter('require_control_heartbeat', True).value
         self.publish_progress = self.declare_parameter('fake_action_progress', True).value
         self.repeat_feedback = self.declare_parameter('fake_repeat_feedback', False).value
-        # /fasten backend: 'fake' (default, P0-a) or 'real' (bench fastening routine on the M0609).
-        # Only the Fasten action changes; MoveTo/Fetch/Stow stay Fake in both cases.
-        self.fasten_backend = self.declare_parameter('fasten_backend', 'fake').value
-        if self.fasten_backend not in ('fake', 'real'):
-            raise ValueError(f'fasten_backend must be fake or real, got {self.fasten_backend}')
-        default_points = ['L:2', 'R:1'] if self.real_cycle else ['assembly_bolt:1']
-        point_map = list(self.declare_parameter('fasten_point_map', default_points).value)
-        fasten_vision = self.declare_parameter('fasten_vision', True).value
-        fasten_camera_topic = self.declare_parameter('fasten_camera_topic', '').value
-        stop_service = self.declare_parameter(
-            'dsr_stop_service', '/dsr01/dsr_controller2/motion/move_stop').value
-        duplicate_wait = self.declare_parameter('fasten_server_check_s', 1.0).value
         if not isfinite(self.heartbeat_timeout) or self.heartbeat_timeout <= 0:
             raise ValueError('control_heartbeat_timeout must be positive')
         self.control_received = 0.0
@@ -70,29 +59,28 @@ class RobotNode(Node):
         self.gate = Lock()
         self.busy = False
         self.stopped = False
-        if self.real_cycle and (self.fasten_backend != 'real' or not fasten_vision or not fasten_camera_topic
-                                or not self.require_heartbeat or not stop_service):
-            raise ValueError('mode=real requires live Image, a real Fasten backend, heartbeat and a stop service')
         self.robot = None if self.real_cycle else FakeRobot(self.get_clock(), self.motion_permission)
         self.gripper = None if self.real_cycle else FakeGripper()
         self.real_fasten = None
-        if self.fasten_backend == 'real':
-            from .real_fasten import RealFasten
-            self.real_fasten = RealFasten(self, point_map, vision=fasten_vision,
-                                          stop_service=stop_service,
-                                          camera_topic=fasten_camera_topic)
-        self.current_pose = TargetPose() if self.real_cycle else self.robot.move_to('top')
-        if self.real_fasten is not None:
-            # Fake keeps its original startup (no graph check): in-process tests recreate nodes and
-            # the graph cache briefly still lists the previous /fasten server.
+        if self.real_cycle:
+            point_map = self.declare_parameter('fasten_point_map', ['L:2', 'R:1']).value
+            camera_topic = self.declare_parameter('camera_topic', topics.CAMERA_COLOR).value
+            stop_service = self.declare_parameter('dsr_stop_service', topics.DSR_MOVE_STOP).value
+            duplicate_wait = self.declare_parameter('fasten_server_check_s', 1.0).value
+            if not camera_topic or not self.require_heartbeat or not stop_service:
+                raise ValueError('mode=real requires a ROS Image topic, heartbeat and a stop service')
             self.require_single_fasten_server(duplicate_wait)
+            from .real_fasten import RealFasten
+            self.real_fasten = RealFasten(self, point_map, stop_service=stop_service,
+                                          camera_topic=camera_topic)
+        self.current_pose = TargetPose() if self.real_cycle else self.robot.move_to('top')
         group = ReentrantCallbackGroup()
-        self.publisher = self.create_publisher(RobotStatus, '/robot_status', 10)
-        self.create_subscription(ControlStatus, '/control_status', self.receive_control, 1)
+        self.publisher = self.create_publisher(RobotStatus, topics.ROBOT_STATUS, 10)
+        self.create_subscription(ControlStatus, topics.CONTROL_STATUS, self.receive_control, 1)
         self.create_timer(0.1, self.watchdog)
-        self.create_service(EmergencyStop, '/robot/emergency_stop', self.stop, callback_group=group)
-        actions = ((Fasten, '/fasten'),) if self.real_cycle else (
-            (MoveTo, '/move_to'), (Fetch, '/fetch'), (Stow, '/stow'), (Fasten, '/fasten'))
+        self.create_service(EmergencyStop, topics.ROBOT_EMERGENCY_STOP, self.stop, callback_group=group)
+        actions = ((Fasten, topics.FASTEN),) if self.real_cycle else (
+            (MoveTo, topics.MOVE_TO), (Fetch, topics.FETCH), (Stow, topics.STOW), (Fasten, topics.FASTEN))
         self.servers = [
             ActionServer(self, kind, name, lambda handle, kind=kind: self.execute(kind, handle),
                          goal_callback=lambda goal, action=kind: self.accept(action, goal), cancel_callback=lambda _: CancelResponse.ACCEPT,
@@ -115,9 +103,9 @@ class RobotNode(Node):
         """Refuse to start when another node already serves /fasten (e.g. Fake and real together)."""
         deadline = monotonic() + max(0.0, wait)
         while True:
-            if self.count_publishers('/fasten/_action/status') > 0:
+            if self.count_publishers(f'{topics.FASTEN}/_action/status') > 0:
                 raise RuntimeError('/fasten is already served by another node; '
-                                   'run exactly one robot_node (fasten_backend fake or real)')
+                                   'run exactly one robot_node')
             if monotonic() >= deadline:
                 return
             sleep(0.05)
@@ -155,7 +143,7 @@ class RobotNode(Node):
 
     def accept(self, kind, goal):
         if (kind is Fasten and self.real_fasten is not None
-                and self.count_publishers('/fasten/_action/status') > 1):
+                and self.count_publishers(f'{topics.FASTEN}/_action/status') > 1):
             self.get_logger().error('real /fasten goal rejected: another /fasten server is in the graph')
             return GoalResponse.REJECT
         with self.gate:
@@ -179,7 +167,7 @@ class RobotNode(Node):
             width, gripped = (0.0, False) if self.real_cycle else self.gripper.status()
             status = RobotStatus(
                 stamp=self.get_clock().now().to_msg(),
-                robot_mode=self.mode if self.real_fasten is None else f'{self.mode}+real_fasten',
+                robot_mode=self.mode,
                 busy=self.busy, stopped=self.stopped, safe_to_move=self.motion_ready(),
                 error_code=self.error, error_message=self.stop_reason if self.stopped else (
                     self.error.name if self.error else ''),
@@ -315,7 +303,7 @@ class RobotNode(Node):
                          fastening=result.state, peak_torque_nm=result.peak_torque,
                          turns=result.turns, tightening_valid=result.tightening_valid,
                          stop_reason=result.stop_reason, recipe_id=goal.recipe_id,
-                         backend=self.fasten_backend, detail=detail, point_id=goal.point_id,
+                         backend=self.mode, detail=detail, point_id=goal.point_id,
                          fasten_log=self.real_fasten.last_log if self.real_fasten else ''))
             self.publish_status()
         result.success = error == Error.OK
@@ -326,9 +314,9 @@ class RobotNode(Node):
         """Real /fasten: blocking routine with cancel/stop checks and periodic feedback.
         Control expects feedback within 3 s and a rising progress within 3 s, so a ticker
         publishes every second and raises progress by one every two seconds (max 98)."""
-        if not goal.point_id or (not self.real_cycle and not valid_pose(goal.bolt_pose)):
-            return Error.INVALID, 'invalid_point_or_pose'
-        if self.real_cycle and goal.bolt_pose.valid:
+        if not goal.point_id:
+            return Error.INVALID, 'invalid_point_id'
+        if goal.bolt_pose.valid:
             return Error.INVALID, 'real_cycle_requires_taught_point'
         started = monotonic()
         stage = {'name': 'FASTEN', 'progress': 0}

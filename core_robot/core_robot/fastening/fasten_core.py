@@ -16,7 +16,7 @@ import os
 import time
 from datetime import datetime
 
-ROBOT_ID = "dsr01"
+from core_common.topics import DSR_ROBOT_ID as ROBOT_ID
 ROBOT_MODEL = "m0609"
 
 # ---------------------------------------------------------------- 측정값 (2026-11-26)
@@ -84,7 +84,6 @@ MAX_TOTAL_DEG = 360.0 * 8      # 총 회전 상한 → 넘으면 '확인 필요'
 MAX_CYCLES = 10
 
 # ---------------------------------------------------------------- 비전
-CAM_PORT = 6000
 VISION_ITERS = 2               # 재고 돌리고 다시 재기
 VISION_FRAMES = 10             # 한 번 잴 때 합치는 프레임 수 (한 장은 conf 가 흔들림 — 11/26 slot_view 실측)
 VISION_TOL_DEG = 3.0           # [튜닝] 이보다 작게 어긋나면 정렬 완료
@@ -180,23 +179,16 @@ class Fastener:
         self.cam = None
         self.calib = None
         self.vision_tag = 0
-        self.strict_camera = camera_factory is not None
-        if self.strict_camera and (not vision or self.sim):
+        use_camera = vision and not self.sim
+        if use_camera != (camera_factory is not None):
             self.close()
-            raise Abort("ROS camera requires vision on a non-simulated fastening run")
-        if vision and not self.sim:
+            raise Abort("vision requires a ROS Image subscriber; simulation or no-vision must omit it")
+        if use_camera:
             try:
                 from . import slot_vision
                 self.sv = slot_vision
-                if self.strict_camera:
-                    self.cam = camera_factory(self.guard)
-                    first = self.check_camera()
-                else:
-                    from .udp_camera import UdpCamera
-                    self.cam = UdpCamera(port=CAM_PORT, unicast=True)
-                    first = self.cam.latest(settle_s=0.0, timeout=3.0)
-                    if first is None:
-                        raise Abort("camera: 3 초 동안 영상이 오지 않음 (B-1 PC send 확인, view 창은 닫기)")
+                self.cam = camera_factory(self.guard)
+                first = self.check_camera()
                 if not calib_vision:
                     self.calib = slot_vision.load_calib()
                     if self.calib is None:
@@ -218,8 +210,8 @@ class Fastener:
                 raise
 
     def check_camera(self):
-        """ROS 영상이면 지금 영상이 들어오는지 확인하고 그 한 장을 돌려준다 (UDP 면 None)."""
-        if self.strict_camera:
+        """Check for a fresh frame when a camera is in use."""
+        if self.cam is not None:
             try:
                 return self.cam.latest(settle_s=0.0, timeout=3.0)
             except RuntimeError as exc:
@@ -352,9 +344,7 @@ class Fastener:
         try:
             frames = self.cam.frames(n=VISION_FRAMES, settle_s=0.4)
         except RuntimeError as exc:
-            if self.strict_camera:
-                raise Abort(f"camera: {exc}") from exc
-            raise
+            raise Abort(f"camera: {exc}") from exc
         if moved:
             self.move_rel([-dx, -dy, 0, 0, 0, 0], self.dr.DR_TOOL)
         self.check_image_size(frames)

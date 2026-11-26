@@ -3,7 +3,7 @@
 | 패키지 | 책임 |
 |---|---|
 | core_interfaces | Action, Service, Message 정의와 코드 생성 |
-| core_common | 공통 판정, 오류, API 계약과 로깅 |
+| core_common | 공통 판정, 오류, API 계약, ROS 통신 이름과 로깅 |
 | core_control | `control`의 단일 Assembly Task FSM과 JSONL, CLI, 별도 프로세스인 CORE MONITOR |
 | core_robot | 로봇 Action 공통 실행 슬롯, Fake 알고리즘, 실물 체결 테스트 백엔드와 진단 CLI, Episode 기록 |
 | core_vision | Fake 상단·측면 검사, 물품 위치 서비스와 L/R 존재 검사 |
@@ -24,7 +24,6 @@ flowchart LR
     R -->|"/robot_status"| M
     C -->|"/control_status · /event_log · /task_result"| M
     S["기존 ROS 영상 · Wrench 발행기"] --> M
-    S -->|"기존 ROS JPEG"| U["UDP 송신기 → 기존 비전 PC"]
     C --> J["결과·이벤트 JSONL"]
     R --> E["Episode"]
 ```

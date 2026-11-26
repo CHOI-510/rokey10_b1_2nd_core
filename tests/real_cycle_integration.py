@@ -47,7 +47,7 @@ def exercise(probe):
 
     def publish_status():
         status.publish(RobotStatus(stamp=probe.get_clock().now().to_msg(),
-                                   robot_mode='real+real_fasten', safe_to_move=True,
+                                   robot_mode='real', safe_to_move=True,
                                    last_completed_goal_id=completed))
 
     probe.create_service(InspectPositions, '/integration/inspect_positions', inspect)

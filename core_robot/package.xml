@@ -13,7 +13,6 @@
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-gi</exec_depend>
   <!-- Doosan and robot_control are sourced separately for the optional hardware path. -->
   <export><build_type>ament_python</build_type></export>
 </package>

@@ -2,7 +2,7 @@
 
 Subscription QoS follows the publisher's reliability. A BEST_EFFORT subscriber on a
 RELIABLE RealSense topic is QoS-compatible, but a raw 1280x720 frame (~2.7 MB) is split
-into many UDP fragments; losing any one drops the whole frame and best effort never
+into many transport fragments; losing any one drops the whole frame and best effort never
 resends it, so the callback may never fire. A RELIABLE subscription to a RELIABLE publisher
 resends missing fragments.
 """

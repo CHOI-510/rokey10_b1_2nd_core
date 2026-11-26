@@ -4,7 +4,6 @@
   ros2 run core_robot slot_view                # 로봇은 움직이지 않음
   ros2 run core_robot slot_view --bolt 1       # 대기 자세 → 볼트1 위 보기 높이(VIEW_H)로 이동한 뒤 시작
   ros2 run core_robot slot_view --bolt 1 --height 60
-  ros2 run core_robot slot_view --camera-topic /camera/camera/color/image_raw   # 카메라 직결 PC
 
 키
   화면 판정 = 최근 10 장을 합친 값 (fasten_test 와 같은 방식), 둘째 줄은 한 장 판정 · 각도는 0~90° 로 표시
@@ -15,8 +14,8 @@
   비켜선 상태의 회전은 fasten_test 와 똑같이 "볼트 축으로 돌아가 회전 → 다시 비켜서기" 로 한다.
   좋은 자리를 찾으면 터미널에 찍힌 VIEW_H · VIEW_OFFSET_TOOL 값을 fasten_core.py 에 옮겨 적는다.
 
-UDP 입력(기본)이면 B-1 PC 에서 send 가 돌고 있어야 하고, camera_udp_h264.py view 창은 닫아야 한다(같은 포트).
---camera-topic 이면 이 PC 에서 realsense2_camera 가 떠 있어야 한다. 보정 해상도와 다르면 ROI 를 쓰지 않는다.
+core_common.topics.CAMERA_COLOR의 ROS Image를 구독한다. --camera-topic으로 지정할 수 있다.
+보정 해상도와 다르면 ROI를 쓰지 않는다.
 로봇을 움직일 때는 터미널 1 에서 s → sodreal(또는 sodvir) 브링업이 떠 있어야 한다.
 """
 import argparse
@@ -25,6 +24,8 @@ import sys
 import time
 from collections import deque
 from contextlib import ExitStack
+
+from core_common import topics
 
 import cv2
 
@@ -119,8 +120,10 @@ def main():
     ap = argparse.ArgumentParser(description="홈 각도 검출 실시간 확인")
     ap.add_argument("--bolt", type=int, choices=[1, 2], help="이 볼트 위 보기 높이로 로봇을 옮긴 뒤 시작")
     ap.add_argument("--height", type=float, default=None, help="티칭점 위 높이 mm (기본 VIEW_H)")
-    ap.add_argument("--camera-topic", default="", help="ROS 원본 Image 토픽. 생략하면 기존 UDP 입력")
+    ap.add_argument("--camera-topic", default=topics.CAMERA_COLOR, help="ROS 원본 Image 토픽")
     opts = ap.parse_args(argv)
+    if not opts.camera_topic:
+        ap.error("--camera-topic에는 토픽 이름이 필요합니다")
 
     calib = sv.load_calib()
     roi = calib["roi"] if calib else None
@@ -139,12 +142,7 @@ def main():
 
 
 def open_camera(topic, stack):
-    """topic 이 있으면 ROS Image 구독(자체 노드 · executor), 없으면 UDP. stack 이 닫을 때 정리한다."""
-    if not topic:
-        from .udp_camera import UdpCamera
-        cam = UdpCamera(unicast=True)
-        stack.callback(cam.close)
-        return cam
+    """Use a ROS Image subscription on a dedicated executor thread."""
     import rclpy
     from .ros_image_camera import ros_camera_factory
     if not rclpy.ok():
@@ -179,7 +177,7 @@ def loop(cam, robot, calib, roi, ref):
         frame = cam.read(timeout=0.5)
         if frame is None:
             if time.time() - last_wait > 3.0:
-                print("영상 없음 — 카메라 입력 확인 (UDP send / --camera-topic)", flush=True)
+                print("영상 없음 — ROS Image 발행기와 --camera-topic 확인", flush=True)
                 last_wait = time.time()
             if cv2.waitKey(1) & 0xFF in (27, ord("q")):
                 break

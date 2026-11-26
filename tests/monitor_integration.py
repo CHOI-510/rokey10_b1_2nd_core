@@ -20,6 +20,7 @@ from rclpy.parameter import Parameter
 from PIL import Image as PillowImage
 from sensor_msgs.msg import CompressedImage, Image
 
+from core_common import topics
 from core_common.ros_context import ros_context
 from core_control.monitor_data import MonitorNode
 from core_control.monitor_gui import MonitorWindow
@@ -39,6 +40,7 @@ def stop(process):
 
 @contextmanager
 def monitor(probe, **parameters):
+    parameters.setdefault('preview_enabled', True)
     root = tk.Tk()
     node = MonitorNode(
         cli_args=['--ros-args', '-r', '__node:=monitor_test'],
@@ -75,7 +77,7 @@ def monitor(probe, **parameters):
 
 
 def exercise(probe):
-    image_topic = '/camera/color/image_raw'
+    image_topic = topics.CAMERA_COLOR
     images = probe.create_publisher(Image, image_topic, 1)
     wrenches = probe.create_publisher(WrenchStamped, '/monitor_test/wrench', 10)
     with monitor(probe) as (root, window, wait):
@@ -195,10 +197,10 @@ def main():
         try:
             standalone = subprocess.Popen(
                 ['ros2', 'run', 'core_control', 'monitor_gui', '--ros-args',
-                 '-r', '__node:=standalone_monitor_test'], start_new_session=True)
+                 '-r', '__node:=standalone_monitor_test', '-p', 'preview_enabled:=true'], start_new_session=True)
             try:
                 probe.wait(lambda: any(endpoint.node_name == 'standalone_monitor_test' for endpoint in
-                                       probe.get_subscriptions_info_by_topic('/camera/color/image_raw')),
+                                       probe.get_subscriptions_info_by_topic(topics.CAMERA_COLOR)),
                            'standalone monitor subscriptions')
                 settled_at = monotonic() + 0.4
                 probe.wait(lambda: monotonic() >= settled_at, 'standalone GUI event loop')

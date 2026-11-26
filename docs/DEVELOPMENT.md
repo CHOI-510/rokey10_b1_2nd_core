@@ -121,7 +121,6 @@ ros2 launch core_bringup system.launch.py mode:=fake gui:=true
 python3 tests/fake_integration.py
 python3 tests/stability_integration.py
 python3 tests/monitor_integration.py
-python3 tests/video_pipeline.py
 python3 tests/real_fasten_contract.py
 python3 tests/fasten_camera_input.py
 ```
@@ -146,17 +145,16 @@ git push -u origin HEAD
 | 범위 | 파일 |
 |---|---|
 | Launch·설정 | `core_bringup/launch/system.launch.py`, `core_bringup/config/{workspace,robot}.yaml` |
-| 공통 도구 | `core_common/core_common/{announcements,camera_udp_h264,reporter,robot_api,status_qos,types}.py` |
+| 공통 도구 | `core_common/core_common/{announcements,reporter,robot_api,status_qos,topics,types}.py` |
 | 관제·GUI·CLI | `core_control/core_control/{control,control_interface,monitor_data,monitor_gui,task_assembly}.py`, `core_control/package.xml` |
 | Action | `core_interfaces/action/{Fasten,Fetch,MoveTo,Stow}.action` |
 | 메시지 | `core_interfaces/msg/{ControlStatus,LogEvent,RobotStatus,TaskResult}.msg` |
 | 서비스 | `core_interfaces/srv/{EmergencyStop,JobCommand,ParseCommand}.srv` |
 | 언어 계약 | `core_language/core_language/{llm_node,prompts,voice_commands}.py` |
 | Robot·기록 | `core_robot/core_robot/{episode_recorder,motion,robot_node}.py` |
-| 시험 | `tests/{fake_integration,monitor_integration,stability_integration,video_pipeline}.py` |
+| 시험 | `tests/{fake_integration,monitor_integration,stability_integration}.py` |
 | 문서 | `README.md`, `docs/{DESIGN_V0.1,ARCHITECTURE,INTERFACES,SAFETY,DEVELOPMENT,ROADMAP,VIDEO_PIPELINE}.md` |
 
-작업 시작 시 위 목록에는 팀원이 작업 중이던 안정화 코드와 UDP 모듈이 포함되어 있었습니다. 작업 범위는 워크트리 전체 변경이며 공유 전 스테이징 대상을 검토합니다.
 
 ## 안정화·영상 통합 재검증
 
@@ -168,7 +166,6 @@ Ubuntu 24.04, ROS 2 Jazzy 및 Cyclone DDS Domain 50의 LOCALHOST에서 실행했
 | Fake 통합 | 기존 9개 시나리오 및 취소 시험 총 10개 통과. 출처와 정지 원인의 JSONL 일치, Fasten 계측값과 Episode 값 일치도 확인했습니다. |
 | 장애 주입 | 느린 성공, 실행 Timeout, Feedback Timeout, 진행 중단, Control 프로세스 강제 종료와 재시작, Control 없는 직접 STOP·중복 요청, STOP·RESUME 응답 유실, 제한된 재시도와 만료 RESUME, 지연된 Action 종결, 블로킹 Action 중 STOP, 최초 internal_error 보존, 공구 파지 중 RECOVER의 12개 확인을 통과했습니다. 시험 종료 시 일부 rclpy GuardCondition 해제 경고가 출력됐습니다. |
 | GUI | 단독 실행, 다섯 버튼, 상태·로그·실측 표시, Raw 및 JPEG, NO SIGNAL·복구와 보조 OFF, Preview 비활성화, 재시작 시 마지막 결과, GUI 종료 후 작업 완료를 통과했습니다. 최종 로컬 시험에서 Raw 입력 중 STOP 클릭부터 관제·Robot 양쪽 래치 표시까지 0.134초를 관측했습니다. |
-| UDP/Preview | GStreamer 기존 송수신 및 1·2개 루프백 목적지, Preview 활성화·비활성화 비교를 통과했습니다. [측정 수치](VIDEO_PIPELINE.md#로컬-합성-영상-결과) |
 
 M0609·RG2 구동, 실제 정지 회로와 제어기 확인, D435i 캡처·인코딩, 현장 YOLO/검사 입력, 팀원 PC 두 대의 네트워크 부하·손실·지연은 미검증입니다.
 

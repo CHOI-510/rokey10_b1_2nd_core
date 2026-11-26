@@ -3,12 +3,12 @@
 
 A. Routine contract: RealFasten + core_robot.fastening.fasten_core against a simulated DSR API
    (success, not confirmed, unmeasured torque, cancel, stop, unsupported goals).
-B. ROS Action: robot_node with fasten_backend:=real on local DDS, real DSR_ROBOT2 import but no
-   controller -> goal validation results, UNAVAILABLE before motion, duplicate /fasten guard.
+B. ROS Action: real-mode robot_node on local DDS with a substituted controller that cannot
+   execute motion -> goal validation, UNAVAILABLE before motion, duplicate /fasten guard.
 
-Run from the repository root after sourcing the Doosan workspace and the Core overlay:
+Run from the repository root after sourcing the Core overlay:
     python3 tests/real_fasten_contract.py
-It never drives a robot: part A uses a simulated DSR object, part B has no controller to talk to.
+Both parts substitute the Doosan API and can run without a hardware overlay.
 """
 import os
 import subprocess
@@ -224,12 +224,16 @@ ACTION_SCRIPT = r'''
 import sys
 from threading import Thread
 from time import monotonic, sleep
+from unittest.mock import patch
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.parameter import Parameter
+from core_common import topics
 from core_common.errors import ErrorCode as Error
 from core_interfaces.action import Fasten
+from core_interfaces.msg import ControlStatus
+from core_robot.real_fasten import RealFasten
 from core_robot.robot_node import RobotNode
 
 def params(**kw):
@@ -237,15 +241,30 @@ def params(**kw):
 
 rclpy.init()
 data = sys.argv[1]
-node = RobotNode(**params(data_dir=data, fasten_backend="real", require_control_heartbeat=False,
-                          fasten_vision=False))
+original_init = RealFasten.__init__
+def injected(instance, *args, **kwargs):
+    original_init(instance, *args, dr=object(), dsr_available=lambda: False, **kwargs)
+
+with patch.object(RealFasten, '__init__', injected):
+    node = RobotNode(**params(data_dir=data, mode="real"))
+node.real_fasten.services_ready = lambda: True
 client_node = rclpy.create_node("real_fasten_probe")
-client = ActionClient(client_node, Fasten, "/fasten")
+client = ActionClient(client_node, Fasten, topics.FASTEN)
+status = client_node.create_publisher(ControlStatus, topics.CONTROL_STATUS, 10)
+def heartbeat():
+    status.publish(ControlStatus(stamp=client_node.get_clock().now().to_msg(), mode='real',
+                                 control_id='sim-control', task_id='T', state='FASTEN'))
+timer = client_node.create_timer(0.05, heartbeat)
 ex = MultiThreadedExecutor(num_threads=4); ex.add_node(node); ex.add_node(client_node)
 Thread(target=ex.spin, daemon=True).start()
 assert client.wait_for_server(timeout_sec=10.0), "no /fasten server"
 
-def send(recipe="finish", point="assembly_bolt", valid=True):
+deadline = monotonic() + 5
+while not node.control_live():
+    assert monotonic() < deadline, "no heartbeat"
+    sleep(0.02)
+
+def send(recipe="finish", point="R", valid=False):
     g = Fasten.Goal(task_id="T", point_id=point, recipe_id=recipe)
     g.bolt_pose.valid = valid
     g.bolt_pose.pose.header.frame_id = "base_link"
@@ -273,7 +292,7 @@ def show(label, res, fb):
 
 show("confirm", *send("confirm"))
 show("unknown_point", *send(point="bolt_9"))
-show("invalid_pose", *send(valid=False))
+show("invalid_pose", *send(valid=True))
 show("finish_no_controller", *send())
 if sys.argv[2] == "duplicate":
     fake = RobotNode(**params(data_dir=data, require_control_heartbeat=False))
@@ -320,7 +339,7 @@ rclpy.init()
 fake = RobotNode(**p(data_dir=sys.argv[1], require_control_heartbeat=False))
 sleep(1.0)
 try:
-    real = RobotNode(**p(data_dir=sys.argv[1], fasten_backend="real", require_control_heartbeat=False, fasten_vision=False))
+    real = RobotNode(**p(data_dir=sys.argv[1], mode="real"))
     print("STARTED")
     real.journal.close()
 except RuntimeError as exc:
