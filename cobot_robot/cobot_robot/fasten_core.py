@@ -139,7 +139,7 @@ def driver_pose(bolt_id):
 
 class Fastener:
     def __init__(self, dr, logger, bolt_id, *, sim=False, vision=True, calib_vision=False,
-                 should_abort=None, on_stage=None, log_kind=None):
+                 should_abort=None, on_stage=None, log_kind=None, camera_factory=None):
         self.dr = dr
         self.log = logger
         self.sim = sim
@@ -175,32 +175,46 @@ class Fastener:
         self.cam = None
         self.calib = None
         self.vision_tag = 0
+        self.strict_camera = camera_factory is not None
+        if self.strict_camera and (not vision or self.sim):
+            self.close()
+            raise Abort("ROS camera requires vision on a non-simulated fastening run")
         if vision and not self.sim:
-            from cobot_robot.udp_camera import UdpCamera
-            from cobot_robot import slot_vision
-            self.sv = slot_vision
             try:
-                self.cam = UdpCamera(port=CAM_PORT, unicast=True)
-            except RuntimeError as e:
-                self._fp.close()
-                raise Abort(f"camera: {e}")
-            if self.cam.latest(settle_s=0.0, timeout=3.0) is None:
-                self.cam.close()          # 닫지 않고 끝나면 GStreamer-CRITICAL 경고가 쏟아진다
-                self._fp.close()
-                raise Abort("camera: 3 초 동안 영상이 오지 않음 (B-1 PC send 확인, view 창은 닫기)")
-            if not calib_vision:
-                self.calib = slot_vision.load_calib()
-                if self.calib is None:
-                    self.close()
-                    raise Abort(f"vision_calib 없음 — 먼저 --calib-vision 실행 ({slot_vision.CALIB_PATH})")
-                now = {"view_h": VIEW_H, "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM}
-                stale = {k: (self.calib.get(k), v) for k, v in now.items() if self.calib.get(k) != v}
-                if "jac_px_per_mm" not in self.calib:
-                    stale["jac_px_per_mm"] = ("없음", "중심 맞추기용")
-                if stale:
-                    self.close()
-                    raise Abort(f"vision_calib 가 지금 설정과 다름 {stale} — --calib-vision 다시 실행")
-                self.log.info(f"비전 보정 불러옴: {self.calib}")
+                from cobot_robot import slot_vision
+                self.sv = slot_vision
+                if self.strict_camera:
+                    self.cam = camera_factory(self.guard)
+                    self.check_camera()
+                else:
+                    from cobot_robot.udp_camera import UdpCamera
+                    self.cam = UdpCamera(port=CAM_PORT, unicast=True)
+                    if self.cam.latest(settle_s=0.0, timeout=3.0) is None:
+                        raise Abort("camera: 3 초 동안 영상이 오지 않음 (B-1 PC send 확인, view 창은 닫기)")
+                if not calib_vision:
+                    self.calib = slot_vision.load_calib()
+                    if self.calib is None:
+                        raise Abort(f"vision_calib 없음 — 먼저 --calib-vision 실행 ({slot_vision.CALIB_PATH})")
+                    now = {"view_h": VIEW_H, "view_offset_tool": list(VIEW_OFFSET_TOOL), "sponge_mm": SPONGE_MM}
+                    stale = {k: (self.calib.get(k), v) for k, v in now.items() if self.calib.get(k) != v}
+                    if "jac_px_per_mm" not in self.calib:
+                        stale["jac_px_per_mm"] = ("없음", "중심 맞추기용")
+                    if stale:
+                        raise Abort(f"vision_calib 가 지금 설정과 다름 {stale} — --calib-vision 다시 실행")
+                    self.log.info(f"비전 보정 불러옴: {self.calib}")
+            except (ImportError, RuntimeError) as exc:
+                self.close()
+                raise Abort(f"camera: {exc}") from exc
+            except BaseException:
+                self.close()
+                raise
+
+    def check_camera(self):
+        if self.strict_camera:
+            try:
+                self.cam.latest(settle_s=0.0, timeout=3.0)
+            except RuntimeError as exc:
+                raise Abort(f"camera: {exc}") from exc
 
     # ------------------------------------------------------------ 중단 확인 · 단계 알림
     def guard(self):
@@ -315,7 +329,12 @@ class Fastener:
         moved = abs(dx) > 0.01 or abs(dy) > 0.01
         if moved:
             self.move_rel([dx, dy, 0, 0, 0, 0], self.dr.DR_TOOL)
-        frames = self.cam.frames(n=VISION_FRAMES, settle_s=0.4)
+        try:
+            frames = self.cam.frames(n=VISION_FRAMES, settle_s=0.4)
+        except RuntimeError as exc:
+            if self.strict_camera:
+                raise Abort(f"camera: {exc}") from exc
+            raise
         if moved:
             self.move_rel([-dx, -dy, 0, 0, 0, 0], self.dr.DR_TOOL)
         return frames
@@ -486,6 +505,7 @@ class Fastener:
     def run(self):
         """체결 한 번. 반환: "torque_done" | "sim_done" | "max_rotation" | "max_cycles".
         안전 조건 위반은 Abort, 취소 · 정지는 Interrupted 로 올라간다."""
+        self.check_camera()
         self.set_stage("APPROACH", f"bolt{self.bolt_id} 보기 높이로 이동")
         self.go_view()
         result = "max_cycles"
@@ -521,6 +541,7 @@ class Fastener:
     def calibrate_vision(self):
         """날을 홈에 맞춘 상태에서 위로 똑바로 올라가 ROI · 기준각 · 회전 방향을 저장한다."""
         import cv2
+        self.check_camera()
         self.go_view()
         self.go_z(self.bolt[2] + START_H)
         self.force_on(PUSH_FZ_CONTACT)
@@ -625,10 +646,11 @@ class Fastener:
         return ok
 
     def close(self):
-        if self.cam is not None:
-            self.cam.close()
-            self.cam = None
-        if not self._fp.closed:
+        try:
+            if self.cam is not None:
+                camera, self.cam = self.cam, None
+                camera.close()
+        finally:
             self._fp.close()
 
 

@@ -14,7 +14,7 @@
      e. J6 한계 → 힘 해제, 보기 높이로 상승, J6 를 90° 배수 되감기 → a 로.
   4. 힘 해제 → 보기 높이 → 대기 자세. 결과 출력, CSV · 영상 로그 저장.
 
-실행 (터미널 1: s → sodreal 또는 sodvir,  B-1 PC: b1_camera_udp.py send --unicast-to <노트북 IP>)
+실행 (터미널 1: s → sodreal 또는 sodvir,  B-1 PC: camera_udp_h264.py send --codec jpeg --unicast-to <노트북 IP>)
   ros2 run cobot_robot fasten_test --bolt 1 --calib-vision   # 드라이버를 쥘 때마다 1회: ROI · 기준각 · 방향 저장
   ros2 run cobot_robot fasten_test --bolt 1                  # 체결
   ros2 run cobot_robot fasten_test --bolt 1 --no-vision      # 비전 없이 (홈 찾기 회전만)
@@ -29,8 +29,11 @@
 import argparse
 import sys
 import time
+from contextlib import ExitStack, contextmanager
+from threading import Thread
 
 import rclpy
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 
 from cobot_robot.fasten_core import (BOLT_POSES_TAUGHT, GRIP_FORCE, GRIPPER_NAME, RESULT_DONE,
                                      RESULT_SIM_DONE, ROBOT_ID, TOOLCHARGER_IP, TOOLCHARGER_PORT,
@@ -54,6 +57,30 @@ def handover(log):
     input("[확인] 드라이버가 수직이고 흔들리지 않으면 Enter (중단은 Ctrl+C) > ")
 
 
+@contextmanager
+def ros_camera_factory(topic):
+    from cobot_robot.ros_image_camera import RosImageCamera
+
+    node = rclpy.create_node("fasten_test_camera", use_global_arguments=False)
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+
+    def spin():
+        try:
+            executor.spin()
+        except ExternalShutdownException:
+            pass
+
+    thread = Thread(target=spin, name="fasten-test-camera")
+    thread.start()
+    try:
+        yield lambda check_abort: RosImageCamera(node, topic, check_abort)
+    finally:
+        executor.shutdown()
+        thread.join()
+        node.destroy_node()
+
+
 def main(args=None):
     argv = rclpy.utilities.remove_ros_args(sys.argv)[1:]
     ap = argparse.ArgumentParser(description="협동2 코어테스트 나사 체결")
@@ -63,51 +90,75 @@ def main(args=None):
     ap.add_argument("--no-vision", action="store_true", help="비전 정렬 없이 홈 찾기 회전만")
     ap.add_argument("--calib-vision", action="store_true",
                     help="비전 보정만 (ROI · 기준각 · 방향 저장). 드라이버를 다시 쥘 때마다 실행")
+    ap.add_argument("--camera-topic", default="", help="ROS 원본 Image 토픽. 생략하면 기존 UDP 입력")
     opts = ap.parse_args(argv)
     if opts.calib_vision and (opts.no_vision or opts.sim):
         ap.error("--calib-vision 은 --no-vision / --sim 과 같이 쓸 수 없음")
 
+    if opts.camera_topic and (opts.no_vision or opts.sim):
+        ap.error("--camera-topic 은 --no-vision / --sim 과 같이 쓸 수 없음")
+
     rclpy.init(args=args)
     node = rclpy.create_node("fasten_test", namespace=ROBOT_ID)
     try:
-        dr = connect_dsr(node)
-    except ImportError as e:
-        node.get_logger().error(f"DSR_ROBOT2 import 실패: {e}")
-        rclpy.shutdown()
-        return
+        with ExitStack() as stack:
+            run(node, opts, stack)
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
 
+
+def run(node, opts, stack):
     log = node.get_logger()
     fastener = None
+    motion = "hold"
     status, reason = "aborted", ""
+
+    def interrupted():
+        return None if rclpy.ok() else "stopped"
+
+    def prepare(camera_factory=None):
+        return Fastener(dr, log, opts.bolt, sim=opts.sim, vision=not opts.no_vision,
+                        calib_vision=opts.calib_vision, camera_factory=camera_factory,
+                        should_abort=interrupted if camera_factory else None)
+
     try:
+        dr = connect_dsr(node)
+        if opts.camera_topic:
+            factory = stack.enter_context(ros_camera_factory(opts.camera_topic))
+            log.info(f"PREPARE: ROS 원본 영상 {opts.camera_topic}")
+            fastener = prepare(factory)
         setup_tool(dr, log)
+        if fastener is not None:
+            fastener.check_camera()
+        motion = "ready"
         go_ready(dr)
         if not (opts.sim or opts.skip_grip):
             handover(log)
-        fastener = Fastener(dr, log, opts.bolt, sim=opts.sim, vision=not opts.no_vision,
-                            calib_vision=opts.calib_vision)
+        if fastener is None:
+            fastener = prepare()
         if opts.calib_vision:
             reason = fastener.calibrate_vision()
             status = "calibrated"
         else:
             reason = fastener.run()
             status = {RESULT_DONE: "fastened", RESULT_SIM_DONE: "fastened(sim)"}.get(reason, "needs_check")
-    except Abort as e:
+    except (Abort, ImportError) as e:
         reason = str(e)
         log.error(f"중단: {reason}")
     except KeyboardInterrupt:
+        if opts.camera_topic:
+            motion = "hold"
         reason = "keyboard_interrupt"
         log.warn("Ctrl+C — 중단")
     finally:
         if fastener is not None:
-            fastener.finish()
+            fastener.finish(motion)
             log.info("=" * 60)
             log.info(f"결과: {status}  사유: {reason}")
             log.info(f"볼트{opts.bolt}  사이클 {fastener.cycle}  총 회전 {fastener.total_deg:.0f}°  "
                      f"최대 |tau6| {fastener.max_tau6:.2f} Nm")
             log.info(f"로그: {fastener.log_path}")
-        node.destroy_node()
-        rclpy.shutdown()
 
 
 if __name__ == "__main__":

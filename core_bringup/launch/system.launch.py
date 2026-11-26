@@ -23,6 +23,8 @@ def generate_launch_description():
         DeclareLaunchArgument('scenario', default_value='missing', choices=list(SCENARIOS)),
         # /fasten backend: fake (default) or real (cobot_robot routine on the M0609, needs Doosan bringup)
         DeclareLaunchArgument('fasten_backend', default_value='fake', choices=['fake', 'real']),
+        DeclareLaunchArgument('fasten_camera_topic', default_value='',
+                              description='Raw sensor_msgs/Image for real /fasten. Empty uses UDP.'),
         DeclareLaunchArgument('data_dir', default_value='data'),
         DeclareLaunchArgument('voice', default_value='false'),
         DeclareLaunchArgument('llm', default_value='false'),
@@ -35,7 +37,9 @@ def generate_launch_description():
         DeclareLaunchArgument('wrench_topic', default_value=''),
         Node(package='core_robot', executable='robot_node', name='robot_node', output='screen',
              condition=fake, parameters=[str(config / 'robot.yaml'), base, {
-                 'scenario': scenario, 'fasten_backend': LaunchConfiguration('fasten_backend')}]),
+                 'scenario': scenario, 'fasten_backend': LaunchConfiguration('fasten_backend'),
+                 'fasten_camera_topic': ParameterValue(
+                     LaunchConfiguration('fasten_camera_topic'), value_type=str)}]),
         Node(package='core_vision', executable='vision_node', name='vision_node', output='screen',
              condition=fake, parameters=[{'mode': mode, 'scenario': scenario}]),
         Node(package='core_control', executable='control', name='control', output='screen',

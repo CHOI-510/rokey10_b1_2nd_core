@@ -6,7 +6,7 @@
 
 - 로봇은 작업 시작 전에 이미 드라이버를 쥐고 있고, 체결 후에도 계속 쥔다. Action 경로는 `ros2 run cobot_robot fasten_test --skip-grip`과 같은 순서로 실행한다. 드라이버 인계와 그리퍼 개폐는 하지 않는다.
   - 순서: 목표 검사 → Doosan 컨트롤러 확인 → 카메라 · 비전 보정 확인 → TCP 설정(`setup_tool`) → `READY_J` → 체결 → `READY_J`
-- Doosan 브링업(`m0609_rg2_bringup`)이 같은 Domain에서 실행 중이어야 한다. B-1 PC의 손목 카메라 UDP 송신(포트 6000)과 `~/cobot2_ws/logs/vision_calib.json`도 필요하다. 비전 보정은 드라이버를 쥘 때마다 `fasten_test --calib-vision`으로 다시 만든다.
+- Doosan 브링업(`m0609_rg2_bringup`)이 같은 Domain에서 실행 중이어야 한다. 카메라 입력은 ROS 원본 Image 또는 기존 B-1 PC UDP 송신(포트 6000)을 사용한다. 두 경로 모두 `~/cobot2_ws/logs/vision_calib.json`을 사용한다. 비전 보정은 드라이버를 쥘 때마다 `fasten_test --calib-vision`으로 다시 만든다.
 - `dsr_msgs2`와 `DSR_ROBOT2`가 있는 Doosan 워크스페이스를 Core 오버레이보다 먼저 source한다.
 
 ## 실행
@@ -16,6 +16,37 @@ source /opt/ros/jazzy/setup.bash
 source ~/cobot2_ws/install/setup.bash                # Doosan · robot_control
 source ~/cobot2_ws/install/core-v01/local_setup.bash # Core + cobot_robot
 ros2 launch core_bringup system.launch.py mode:=fake fasten_backend:=real
+```
+
+### ms-05의 USB RealSense 원본 토픽 사용
+
+Jazzy의 `cv_bridge`와 `sensor_msgs`를 설치하고 기존 Core 빌드 절차로 `cobot_robot`, `core_robot`, `core_bringup`을 포함한 오버레이를 다시 빌드한다. RealSense 드라이버와 Doosan 브링업을 기동한 환경에서 두 터미널 모두 같은 DDS 설정과 아래 오버레이를 사용한다. Doosan 설치 경로가 다른 PC에서는 해당 워크스페이스를 먼저 source한다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/cobot2_ws/install/setup.bash
+source ~/cobot2_ws/install/core-v01/local_setup.bash
+
+ros2 topic info /camera/camera/color/image_raw -v
+ros2 launch core_bringup system.launch.py \
+  mode:=fake fasten_backend:=real gui:=true \
+  wrist_image_topic:=/camera/camera/color/image_raw \
+  fasten_camera_topic:=/camera/camera/color/image_raw
+```
+
+`fasten_camera_topic`은 체결 Action용 원본 Image 입력, `wrist_image_topic`은 GUI 미리보기 입력이다. 체결 구독은 Sensor Data QoS와 depth 1을 사용하고 `cv_bridge`로 BGR을 생성한다. ROS 입력을 선택하면 UDP 송신·포트 6000·JPEG 토픽이 필요 없다. 인자를 생략하거나 비우면 기존 UDP 선택을 사용한다. 영상 미수신·오래된 시각·디코딩 실패는 첫 모션 전 `UNAVAILABLE`과 PREPARE 로그로 확인할 수 있다. 정렬 중에도 동작 후 촬영한 프레임만 읽으며, 입력 오류는 체결 중단으로 이어진다.
+
+### 체결 비전 보정
+
+이 보정은 드라이버 위치·각도 및 체결 영상 ROI를 저장하는 작업이다. 체결에 사용할 카메라 입력과 해상도로 보정한다. Vision 1의 L/R 존재 검사 ROI는 별개로 설정한다. 보정 명령은 실제 로봇을 움직이므로 장비 준비와 현장 안전 절차를 마친 뒤 단독으로 실행한다.
+
+```bash
+# USB RealSense의 ROS 원본 영상
+ros2 run cobot_robot fasten_test --bolt 1 --calib-vision \
+  --camera-topic /camera/camera/color/image_raw
+
+# 기존 UDP 송신을 쓰는 경우
+ros2 run cobot_robot fasten_test --bolt 1 --calib-vision
 ```
 
 같은 ROS 그래프에서 `/fasten` 서버는 하나만 허용한다.
@@ -70,7 +101,9 @@ ros2 launch core_bringup system.launch.py mode:=fake fasten_backend:=real
 
 ```bash
 python3 tests/real_fasten_contract.py
+python3 tests/fasten_camera_input.py
 ```
 
 - 가상 DSR 객체로 성공 · 미완료 · 토크 미측정 · 취소 · 정지 · 지원하지 않는 목표의 결과를 확인한다.
 - 실물 모드 `robot_node`에 실제 `/fasten` Goal을 보내 거절 경로, 컨트롤러가 없을 때의 `UNAVAILABLE`, 중복 서버 차단을 확인한다.
+- 원본 Image 시험은 가상 Doosan 객체로 실행한다. RGB→BGR, Action 수행 중 콜백, 무수신·오래된 프레임·디코딩 실패 시 모션 0건, 취소·정지 시 구독 해제, 늦게 도착한 이전 프레임 거절, 빈 파라미터의 UDP 선택을 확인한다.

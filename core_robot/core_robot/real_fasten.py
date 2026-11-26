@@ -55,13 +55,15 @@ def parse_point_map(entries, taught):
 
 class RealFasten:
     def __init__(self, node, point_map, vision=True, stop_service='', dr=None,
-                 dsr_available=None, core=None):
+                 dsr_available=None, core=None, camera_topic=''):
         if core is None:
             from cobot_robot import fasten_core as core
         self.core = core
         self.log = node.get_logger()
         self.point_map = parse_point_map(point_map, core.BOLT_POSES_TAUGHT)
         self.vision = vision
+        self.camera_topic = camera_topic
+        self.node = node
         self.fastener = None
         self.last_log = ''
         self.stop_client = None
@@ -82,7 +84,7 @@ class RealFasten:
             self.dr = dr
             self._mode_client = None
         self.log.info(f'real fasten backend: points {self.point_map}, vision {vision}, '
-                      f'stop service {stop_service or "none"}')
+                      f'camera {camera_topic or "UDP"}, stop service {stop_service or "none"}')
 
     @property
     def force_active(self):
@@ -114,6 +116,10 @@ class RealFasten:
         self.stop_client.call_async(self._move_stop.Request(stop_mode=QUICK_STOP))
         self.log.warn('real fasten stop: Doosan move_stop (DR_QSTOP) requested')
 
+    def ros_camera(self, check_abort):
+        from cobot_robot.ros_image_camera import RosImageCamera
+        return RosImageCamera(self.node, self.camera_topic, check_abort)
+
     def execute(self, goal, should_abort, notify, result):
         """Run one fastening. Fills result.state/peak_torque/turns/tightening_valid.
         Returns (ErrorCode, reason)."""
@@ -129,20 +135,29 @@ class RealFasten:
             return (Error.CANCELLED if pending == 'cancelled' else Error.STOPPED), 'before_motion'
         if not self.controller_ready():
             return Error.UNAVAILABLE, 'dsr_controller_unavailable'
-        notify('PREPARE', f'bolt{bolt}: camera / calibration check')
+        if self.camera_topic and not self.vision:
+            return Error.INVALID, 'ros_camera_requires_fasten_vision'
+        self.last_log = ''
+        notify('PREPARE', f'bolt{bolt}: camera / calibration check ({self.camera_topic or "UDP"})')
         try:
             fastener = core.Fastener(self.dr, self.log, bolt, vision=self.vision,
-                                     should_abort=should_abort, on_stage=notify, log_kind='action')
+                                     should_abort=should_abort, on_stage=notify, log_kind='action',
+                                     camera_factory=self.ros_camera if self.camera_topic else None)
+        except core.Interrupted as exc:
+            return (Error.CANCELLED if exc.kind == 'cancelled' else Error.STOPPED), exc.kind
         except core.Abort as exc:
             return Error.UNAVAILABLE, f'fastener_not_ready: {exc}'
         self.fastener = fastener
         self.last_log = fastener.log_path
-        motion, error, reason = 'ready', Error.FAILED, ''
+        motion, error, reason = 'hold', Error.FAILED, ''
         try:
             notify('PREPARE', 'TCP / tool setup')
+            fastener.guard()
             core.setup_tool(self.dr, self.log)
+            fastener.check_camera()
             fastener.guard()
             notify('PREPARE', 'move to READY_J')
+            motion = 'ready'
             core.go_ready(self.dr)
             outcome = fastener.run()
             if outcome == core.RESULT_DONE and fastener.torque_samples > 0:
@@ -156,16 +171,22 @@ class RealFasten:
             if exc.kind == 'stopped':
                 error, motion = Error.STOPPED, 'hold'
             else:
-                error, motion = Error.CANCELLED, 'retreat'
+                error = Error.CANCELLED
+                if motion != 'hold':
+                    motion = 'retreat'
             reason = exc.kind
         except core.Abort as exc:
+            if motion == 'hold':
+                error = Error.UNAVAILABLE
             reason = f'aborted: {exc}'
         except Exception as exc:     # DSR service failure, etc.
             reason = f'exception: {exc}'
         finally:
-            if not fastener.finish(motion) and error == Error.OK:
-                self.log.warn('fastening done but return to READY_J failed')
-            result.turns = fastener.total_deg / 360.0
-            result.peak_torque = fastener.max_tau6 if fastener.torque_samples else 0.0
-            self.fastener = None
+            try:
+                if not fastener.finish(motion) and error == Error.OK:
+                    self.log.warn('fastening done but return to READY_J failed')
+            finally:
+                result.turns = fastener.total_deg / 360.0
+                result.peak_torque = fastener.max_tau6 if fastener.torque_samples else 0.0
+                self.fastener = None
         return error, reason

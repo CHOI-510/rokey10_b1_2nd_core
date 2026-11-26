@@ -49,6 +49,7 @@ class RobotNode(Node):
             raise ValueError(f'fasten_backend must be fake or real, got {self.fasten_backend}')
         point_map = list(self.declare_parameter('fasten_point_map', ['assembly_bolt:1']).value)
         fasten_vision = self.declare_parameter('fasten_vision', True).value
+        fasten_camera_topic = self.declare_parameter('fasten_camera_topic', '').value
         stop_service = self.declare_parameter(
             'dsr_stop_service', '/dsr01/dsr_controller2/motion/move_stop').value
         duplicate_wait = self.declare_parameter('fasten_server_check_s', 1.0).value
@@ -72,7 +73,8 @@ class RobotNode(Node):
         if self.fasten_backend == 'real':
             from .real_fasten import RealFasten
             self.real_fasten = RealFasten(self, point_map, vision=fasten_vision,
-                                          stop_service=stop_service)
+                                          stop_service=stop_service,
+                                          camera_topic=fasten_camera_topic)
         self.current_pose = self.robot.move_to('top')
         if self.real_fasten is not None:
             # Fake keeps its original startup (no graph check): in-process tests recreate nodes and
@@ -341,10 +343,13 @@ class RobotNode(Node):
             ticker.join()
         level = 'INFO' if error == Error.OK else 'ERROR'
         publish(f'{error.name}: {detail}', level)
-        (self.get_logger().info if error == Error.OK else self.get_logger().warn)(
-            f'real fasten {goal.point_id}/{goal.recipe_id}: {error.name} ({detail}), '
-            f'turns {result.turns:.2f}, peak {result.peak_torque:.2f} N·m, '
-            f'log {self.real_fasten.last_log}')
+        message = (f'real fasten {goal.point_id}/{goal.recipe_id}: {error.name} ({detail}), '
+                   f'turns {result.turns:.2f}, peak {result.peak_torque:.2f} N·m, '
+                   f'log {self.real_fasten.last_log}')
+        if error == Error.OK:
+            self.get_logger().info(message)
+        else:
+            self.get_logger().warn(message)
         return error, detail
 
     def run(self, kind, goal, result):
