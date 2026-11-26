@@ -4,12 +4,12 @@
 
 ## 확인한 구성
 
-아래 RTP/JPEG 설정과 측정은 기존 기준 기록입니다. 현재 작업 트리에는 별도의 H.264 송수신 모듈 변경이 있어, 아래 JPEG 실행 예시는 해당 모듈이 있는 버전에 적용됩니다.
+송수신 모듈은 RTP/JPEG와 RTP/H.264를 지원합니다. 아래 설정과 측정은 기본 RTP/JPEG 경로 기준입니다. 체결 UDP 수신기는 RTP/JPEG를 사용합니다.
 
 | 경로 | 저장소에서 확인한 설정 |
 |---|---|
 | 카메라 소유 | 참조 워크스페이스 `~/ws_cobot_pjt/ws_dsr/src/rg2/m0609_rg2_bringup/launch/bringup_camera.launch.py`의 `realsense2_camera_node`. 참조 Launch는 색상·Depth, 정렬, 동기화를 설정합니다. Core Fake Launch는 카메라를 열지 않습니다. |
-| ROS JPEG → UDP | `core_common/core_common/b1_camera_udp.py send`의 기본 입력은 `/camera/color/image_raw/compressed` (`sensor_msgs/msg/CompressedImage`, JPEG)입니다. |
+| ROS JPEG → UDP | `core_common/core_common/camera_udp_h264.py send`의 기본 입력은 `/camera/color/image_raw/compressed` (`sensor_msgs/msg/CompressedImage`, JPEG)입니다. |
 | UDP | GStreamer RTP/JPEG, payload 26, clock-rate 90000, MTU 1200, 기본 포트 6000. `--unicast-to`를 대상마다 한 번 지정합니다. 비전 PC 두 대의 기존 설정을 사용합니다. |
 | UDP 수신 | 같은 모듈의 `view --unicast` 또는 Python `MulticastCamera(..., unicast=True)`. 지터 버퍼 기본 60 ms, appsink 최신 프레임 1개, OpenCV BGR 반환. 수신기가 ROS로 재발행하는 코드와 현장 대상 IP는 확인하지 못했습니다. |
 | GUI | 기본 손목 입력은 `/camera/color/image_raw` (`sensor_msgs/msg/Image`), 보조 입력은 비어 있습니다. 명시 설정 시 기존 JPEG 토픽이나 YOLO 오버레이 토픽을 구독할 수 있습니다. |
@@ -30,11 +30,11 @@ RealSense는 기존 드라이버 프로세스 한 개가 소유합니다. 비전
 
 ```bash
 # 기존 송신 PC. 현재 업무에 사용하는 주소와 포트를 설정
-python3 -m core_common.b1_camera_udp send --topic "$JPEG_TOPIC" --port "$PORT" \
+python3 -m core_common.camera_udp_h264 send --topic "$JPEG_TOPIC" --port "$PORT" \
   --unicast-to "$VISION_PC1" --unicast-to "$VISION_PC2" --stats
 
 # 기존 비전 담당 PC
-python3 -m core_common.b1_camera_udp view --unicast --port "$PORT" --headless
+python3 -m core_common.camera_udp_h264 view --unicast --port "$PORT" --headless
 
 # 메인 서버 또는 영상 토픽이 이미 있는 PC
 ros2 run core_control monitor_gui --ros-args \

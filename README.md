@@ -4,16 +4,30 @@
 
 실물 통합에는 두산 M0609·RG2 어댑터, 카메라·힘 센서 발행기, YOLO 연동, 독립 그리퍼 상태와 현장 안전 검증이 남아 있습니다. [로드맵](docs/ROADMAP.md)
 
+## 패키지와 진입점
+
+| 패키지 | 담당 |
+|---|---|
+| `core_bringup` | 시스템 Launch와 파라미터 |
+| `core_common` | 공통 타입·오류·기록·영상 전송 도구 |
+| `core_control` | FSM, CLI, CORE MONITOR |
+| `core_interfaces` | ROS Action·Service·Message |
+| `core_language` | 음성·LLM 연동 계약 |
+| `core_robot` | 로봇 Action, 체결 구현과 단독 진단 명령 |
+| `core_vision` | Fake 검사와 L/R 존재 검사 |
+
+실행 모드는 기본 Fake 조립과 외부 L/R 검사입니다. 실물 체결 시험의 공용 구현과 `fasten_test`·`slot_view` 진입점은 `core_robot`에 있습니다. 장비 연결과 두 실행 경로의 적용 범위는 [실물 체결 문서](docs/REAL_FASTEN.md)를 참고하세요.
+
 ## 설치 및 빌드
 
 Ubuntu 24.04에서 ROS 2 Jazzy와 Cyclone DDS를 사용합니다. Jazzy apt 저장소가 설정된 환경에서 필요한 패키지를 설치합니다. GUI는 Tkinter와 Pillow를 사용하며 그래픽 디스플레이가 필요합니다.
 
 ```bash
 sudo apt install ros-jazzy-ros-base ros-jazzy-rmw-cyclonedds-cpp \
-  ros-jazzy-rosidl-default-generators ros-jazzy-sensor-msgs ros-jazzy-geometry-msgs \
-  python3-colcon-common-extensions python3-tk python3-pil
+  ros-jazzy-rosidl-default-generators ros-jazzy-sensor-msgs ros-jazzy-geometry-msgs ros-jazzy-cv-bridge \
+  python3-colcon-common-extensions python3-tk python3-pil python3-numpy python3-opencv python3-gi
 mkdir -p ~/cobot2_ws/src
-git clone -b develop https://github.com/CHOI-510/rokey10_b1_2nd_core.git ~/cobot2_ws/src/core_project
+git clone -b main https://github.com/CHOI-510/rokey10_b1_2nd_core.git ~/cobot2_ws/src/core_project
 ```
 
 이미 체크아웃했다면 clone은 생략합니다. 새 터미널에서 워크스페이스 루트로 이동해 Core 패키지만 빌드합니다.

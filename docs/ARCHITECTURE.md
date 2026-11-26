@@ -5,8 +5,8 @@
 | core_interfaces | Action, Service, Message 정의와 코드 생성 |
 | core_common | 공통 판정, 오류, API 계약과 로깅 |
 | core_control | `control`의 단일 Assembly Task FSM과 JSONL, CLI, 별도 프로세스인 CORE MONITOR |
-| core_robot | 로봇 Action 공통 실행 슬롯, Fake 알고리즘, Episode 기록 |
-| core_vision | Fake 상단·측면 검사와 물품 위치 서비스, 실물 템플릿 |
+| core_robot | 로봇 Action 공통 실행 슬롯, Fake 알고리즘, 실물 체결 테스트 백엔드와 진단 CLI, Episode 기록 |
+| core_vision | Fake 상단·측면 검사, 물품 위치 서비스와 L/R 존재 검사 |
 | core_language | 음성·LLM 연동 자리와 계약 |
 | core_bringup | Fake 조립 및 L/R 외부 검사 Launch, 선택 GUI·음성·LLM 노드와 설정 |
 
@@ -55,3 +55,7 @@ flowchart LR
 `mode:=inspection`에서 같은 관제 FSM과 GUI 명령을 사용합니다. 관제는 외부 `/integration/inspect_positions`로 최초 검사와 재검사를 수행하고, 작업자 DONE 이후 L/R 모두 PRESENT이면 `/integration/read_fastening`으로 검사 결과를 읽습니다. 상태와 결과는 `/control_status`, `/task_result`와 JSONL에 전달됩니다. DB는 결과 토픽을 독립 구독합니다.
 
 `READY → INSPECT → WAIT_WORKER → RECHECK → VERIFY → REPORT` 경로에서 Robot Node와 Fake Vision은 기동하지 않습니다. VERIFY는 별도 절차에서 획득한 체결 상태의 조회 단계입니다. [L/R 통신 계약](INTERFACES.md#lr-최소-통합-계약)
+
+## 독립 체결 시험과 Action 백엔드
+
+`core_robot/robot_node.py`가 `/fasten`을 제공하고, 장비 시험에는 `real_fasten.py`를 통해 `core_robot.fastening`의 공용 체결 루틴을 호출합니다. `fasten_test`와 `slot_view`는 같은 패키지의 독립 진단 진입점입니다. Vision 1은 L/R 위치의 볼트 존재를 판정하고, 체결 패키지의 영상 코드는 드라이버와 십자 홈 정렬에 사용합니다. [실물 체결 문서](REAL_FASTEN.md)

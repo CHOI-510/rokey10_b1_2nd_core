@@ -5,8 +5,9 @@ InspectPositions.srv with presence_l and presence_r; do not generate a substitut
 Install ROS Jazzy cv_bridge, sensor_msgs, python3-opencv and python3-numpy.
 Build from ~/cobot2_ws after sourcing Jazzy:
 
-    colcon build --symlink-install --packages-up-to core_vision --base-paths src/core_project
-    source install/setup.bash
+    colcon --log-base log/core-v01 build --base-paths src/core_project \
+      --build-base build/core-v01 --install-base install/core-v01 --symlink-install
+    source install/core-v01/local_setup.bash
     ros2 launch realsense2_camera rs_launch.py
 
 In another sourced terminal check `ros2 topic list` and calibrate:

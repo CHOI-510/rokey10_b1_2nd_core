@@ -122,11 +122,13 @@ python3 tests/fake_integration.py
 python3 tests/stability_integration.py
 python3 tests/monitor_integration.py
 python3 tests/video_pipeline.py
+python3 tests/real_fasten_contract.py
+python3 tests/fasten_camera_input.py
 ```
 
 GUI 시험에는 로컬 그래픽 세션이 필요합니다. 영상 송수신과 실측 방법은 [영상 파이프라인](VIDEO_PIPELINE.md)을 참고합니다.
 
-팀 검토 후 변경을 공유할 때 사용하는 명령입니다. 스테이징 전에 팀원 작업과 주소·데이터 파일을 확인합니다.
+최신 main에서 시작한 작업 브랜치의 변경을 팀 검토용으로 공유할 때 사용하는 명령입니다. 스테이징 전에 팀원 작업과 주소·데이터 파일을 확인합니다.
 
 ```bash
 git status --short
@@ -136,7 +138,7 @@ git add -p
 # git add <검토한 신규 파일>
 git diff --cached --stat
 git commit -m "Stabilize core control and integrate monitor preview"
-git push origin develop
+git push -u origin HEAD
 ```
 
 ## 변경 파일 목록
@@ -144,7 +146,7 @@ git push origin develop
 | 범위 | 파일 |
 |---|---|
 | Launch·설정 | `core_bringup/launch/system.launch.py`, `core_bringup/config/{workspace,robot}.yaml` |
-| 공통 도구 | `core_common/core_common/{announcements,b1_camera_udp,reporter,robot_api,status_qos,types}.py` |
+| 공통 도구 | `core_common/core_common/{announcements,camera_udp_h264,reporter,robot_api,status_qos,types}.py` |
 | 관제·GUI·CLI | `core_control/core_control/{control,control_interface,monitor_data,monitor_gui,task_assembly}.py`, `core_control/package.xml` |
 | Action | `core_interfaces/action/{Fasten,Fetch,MoveTo,Stow}.action` |
 | 메시지 | `core_interfaces/msg/{ControlStatus,LogEvent,RobotStatus,TaskResult}.msg` |

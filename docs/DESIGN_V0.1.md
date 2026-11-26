@@ -1,7 +1,7 @@
 # 협동-2 초기 코어 설계 v0.1 (Design Freeze, 2026-11-26)
 
 ## 환경
-Ubuntu 24.04 / ROS 2 Jazzy / M0609 + RG2(Modbus TCP) / 손목 D435i / YOLO·OpenCV / Wakeword·STT·LLM API·TTS / Git main+develop+work 브랜치
+Ubuntu 24.04 / ROS 2 Jazzy / M0609 + RG2(Modbus TCP) / 손목 D435i / YOLO·OpenCV / Wakeword·STT·LLM API·TTS / Git main 기준
 
 ## 코어 시퀀스 (FSM, 단일 Task)
 READY → INSPECT(상단: MISSING/PRESENT/UNKNOWN)

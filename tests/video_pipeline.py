@@ -16,7 +16,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import CompressedImage
 
-from core_common.b1_camera_udp import MulticastCamera
+from core_common.camera_udp_h264 import MulticastCamera
 from core_common.ros_context import ros_context
 from core_control.monitor_data import MonitorNode
 
@@ -30,7 +30,7 @@ def run(publisher_node, publisher, sample, fanout, preview):
         extra.bind(('127.0.0.2', 0))
         extra.setblocking(False)
         port = extra.getsockname()[1]
-        script = Path(__file__).resolve().parents[1] / 'core_common/core_common/b1_camera_udp.py'
+        script = Path(__file__).resolve().parents[1] / 'core_common/core_common/camera_udp_h264.py'
         command = [sys.executable, str(script), 'send', '--topic', TOPIC, '--port', str(port),
                    '--unicast-to', '127.0.0.1', '--stats']
         if fanout == 2:
