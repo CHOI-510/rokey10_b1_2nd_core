@@ -92,7 +92,8 @@ class RobotNode(Node):
                 < self.heartbeat_timeout * 1e9)
 
     def receive_control(self, message):
-        if message.control_id and current_stamp(self, message.stamp, self.heartbeat_timeout):
+        if (message.mode == self.mode and message.control_id
+                and current_stamp(self, message.stamp, self.heartbeat_timeout)):
             with self.gate:
                 stamp = time_ns(message.stamp)
                 if stamp <= self.control_stamp or message.control_id in self.retired_controls:

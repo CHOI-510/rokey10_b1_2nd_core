@@ -169,3 +169,11 @@ Ubuntu 24.04, ROS 2 Jazzy 및 Cyclone DDS Domain 50의 LOCALHOST에서 실행했
 | UDP/Preview | GStreamer 기존 송수신 및 1·2개 루프백 목적지, Preview 활성화·비활성화 비교를 통과했습니다. [측정 수치](VIDEO_PIPELINE.md#로컬-합성-영상-결과) |
 
 M0609·RG2 구동, 실제 정지 회로와 제어기 확인, D435i 캡처·인코딩, 현장 YOLO/검사 입력, 팀원 PC 두 대의 네트워크 부하·손실·지연은 미검증입니다.
+
+## L/F 최소 실물 결과 통합
+
+단일 볼트 Fake 조립 서비스와 Action을 유지하면서 외부 L/F 관측을 위한 두 읽기 전용 서비스를 추가했습니다. 두 위치를 개별 기록하기 위해 기존 ControlStatus와 TaskResult에 위치별 필드 및 출처를 추가했습니다. 배포 전 두 메시지를 사용하는 관제·GUI·Robot·음성·DB와 새 서비스 공급자는 동일한 `core_interfaces`를 재빌드해야 합니다. [담당자 구현 및 실행 계약](INTERFACES.md#lf-최소-통합-계약)
+
+검증은 `python3 tests/inspection_integration.py` 또는 그래픽 세션에서 `python3 tests/inspection_integration.py --gui`로 수행합니다. 시험 공급자는 합성 응답으로 계약 분기를 검사합니다. 팀원 장비의 관측 및 알고리즘 검증은 별도입니다.
+
+로컬 Cyclone DDS에서 7개 패키지 빌드, L/F 합성 공급자·GUI·JSONL 시험, Fake 공정 10개, 장애 주입 12개, 기존 CORE MONITOR 회귀를 통과했습니다. 장애 주입 종료 중 기존 rclpy 리소스 해제 경고가 발생했습니다. 실제 L/F 영상 및 힘·순응제어 알고리즘은 담당자 공급자를 연결한 현장 시험 대상입니다.

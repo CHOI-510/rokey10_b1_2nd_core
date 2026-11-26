@@ -14,3 +14,9 @@ string last_reason
 string[] allowed_commands
 string[] states
 string last_task_id
+string presence_l
+string presence_f
+string fastening_l
+string fastening_f
+string presence_evidence
+string fastening_evidence

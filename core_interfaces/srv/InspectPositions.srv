@@ -1,0 +1,12 @@
+string task_id
+string stage
+builtin_interfaces/Time not_before
+---
+bool success
+int32 error_code
+string reason
+builtin_interfaces/Time stamp
+string origin
+bool verified
+string presence_l
+string presence_f

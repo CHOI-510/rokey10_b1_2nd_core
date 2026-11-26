@@ -12,6 +12,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TaskResult.msg"
   "msg/Announcement.msg"
   "srv/Inspect.srv"
+  "srv/InspectPositions.srv"
+  "srv/ReadFastening.srv"
   "srv/Locate.srv"
   "srv/JobCommand.srv"
   "srv/ParseCommand.srv"

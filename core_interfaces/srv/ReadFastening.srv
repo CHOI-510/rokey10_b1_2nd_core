@@ -1,0 +1,11 @@
+string task_id
+builtin_interfaces/Time not_before
+---
+bool success
+int32 error_code
+string reason
+builtin_interfaces/Time stamp
+string origin
+bool verified
+string fastening_l
+string fastening_f

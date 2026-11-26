@@ -29,7 +29,7 @@ RTP_CAPS = {
 # H.264 is decoded by GStreamer straight to BGR.
 RECEIVE_TAIL = {
     "jpeg": "rtpjpegdepay",
-    "h264": "rtph264depay ! h264parse ! avdec_h264 max-threads=1 "
+    "h264": "rtph264depay ! avdec_h264 max-threads=1 "
             "! videoconvert ! video/x-raw,format=BGR",
 }
 

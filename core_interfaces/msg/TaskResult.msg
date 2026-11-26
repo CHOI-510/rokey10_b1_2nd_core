@@ -14,3 +14,9 @@ bool tightening_valid
 float64 peak_torque
 float64 turns
 string recipe_id
+string presence_l
+string presence_f
+string fastening_l
+string fastening_f
+string presence_evidence
+string fastening_evidence

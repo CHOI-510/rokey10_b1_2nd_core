@@ -35,8 +35,8 @@ class MonitorNode(Node):
     def __init__(self, **node_options):
         super().__init__('monitor_gui', **node_options)
         self.mode = self.declare_parameter('mode', 'fake').value.upper()
-        if self.mode not in ('FAKE', 'REAL'):
-            raise ValueError('mode must be fake or real')
+        if self.mode not in ('FAKE', 'REAL', 'INSPECTION'):
+            raise ValueError('mode must be fake, real or inspection')
         self.cameras = {
             'wrist': self.declare_parameter('wrist_image_topic', '/camera/color/image_raw').value,
             'side': self.declare_parameter('side_image_topic', '').value,

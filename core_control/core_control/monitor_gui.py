@@ -100,6 +100,7 @@ class MonitorWindow:
         font.nametofont('TkDefaultFont', root=root).configure(size=-14)
         font.nametofont('TkTextFont', root=root).configure(size=-13)
         self.values = {}
+        self.captions = {}
         self.history = {}
         self.latest_result = None
         self.pending = set()
@@ -210,6 +211,7 @@ class MonitorWindow:
             row.bind('<Configure>', lambda event, widget=value, title=caption:
                      widget.configure(wraplength=max(1, event.width - title.winfo_reqwidth() - 14)))
             self.values[key] = value
+            self.captions[key] = caption
         return card
 
     def make_controls(self, parent):
@@ -428,13 +430,28 @@ class MonitorWindow:
         if result and result.tightening_valid:
             prefix = 'MOCK · ' if result.mode == 'fake' else ''
             measurements = f'{prefix}{result.peak_torque:.2f} N·m / {result.turns:.2f}'
+        record = control or result
+        inspection_only = self.display_mode == 'INSPECTION'
+        inspection_values = [getattr(record, key, '') or 'N/A'
+                             for key in ('top', 'side', 'fastening')]
+        if inspection_only:
+            inspection_values = [
+                f'{getattr(record, "presence_" + point, "") or "N/A"} / '
+                f'{getattr(record, "fastening_" + point, "") or "N/A"}'
+                for point in ('l', 'f')
+            ]
+            inspection_values.append(
+                f'{getattr(record, "presence_evidence", "") or "UNVERIFIED"} / '
+                f'{getattr(record, "fastening_evidence", "") or "UNVERIFIED"}')
+        captions = (('L 존재 / 체결', 'F 존재 / 체결', '판정 근거') if inspection_only
+                    else ('상단 검사', '측면 검사', '체결 판정'))
+        for key, caption, value in zip(('top', 'side', 'fastening'), captions, inspection_values):
+            self.captions[key].configure(text=caption)
+            self.set_value(key, value)
         for key, value in (
             ('state', state), ('task', displayed_task or 'N/A'),
             ('outcome', outcome or ('RUNNING' if active else 'N/A')),
             ('resume', control.recovery or '—' if control else '—'),
-            ('top', (control.top if control else result.top if result else '') or 'N/A'),
-            ('side', (control.side if control else result.side if result else '') or 'N/A'),
-            ('fastening', (control.fastening if control else result.fastening if result else '') or 'N/A'),
             ('final', outcome or 'N/A'),
             ('reason', reason if state == 'STOPPED' or outcome in ('HOLD', 'FAIL') else '—'),
             ('measurement', measurements), ('recipe', result.recipe_id if result and result.recipe_id else 'N/A'),

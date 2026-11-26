@@ -22,6 +22,8 @@ Robot Node가 Action 공통 실행 슬롯을 관리합니다. 이미 실행 중�
 | 엔드포인트와 타입 | Request | Response |
 |---|---|---|
 | /inspect · Inspect | task_id, stage, view_id | success, error_code, presence, side, TargetPose bolt_pose |
+| /integration/inspect_positions · InspectPositions | task_id, stage, not_before | L/F 존재 판정과 증거 필드 |
+| /integration/read_fastening · ReadFastening | task_id, not_before | L/F 체결 상태와 증거 필드 |
 | /locate · Locate | task_id, item_id | success, error_code, TargetPose pose |
 | /job_command · JobCommand | command, source | bool accepted, state, task_id, reason |
 | /parse_command · ParseCommand | text | success, error_code, command, confidence_valid, confidence, needs_confirmation |
@@ -101,3 +103,55 @@ Control과 Robot 상태에 메시지 시각 및 로컬 수신 기한을 적용�
 체결 입력은 공구 좌표계의 Z축으로 정렬한 Fz(N)와 Mz(N·m)를 사용합니다. 발행 측은 관제와 같은 ROS 시간 기준으로 `header.stamp`를 채웁니다. GUI는 최신 관제 상태가 FASTEN인 동안 체결 단계 시작 시각 이후의 샘플을 수집합니다. 그래프에는 최근 400개 샘플을 그리며, 최대값은 수신한 샘플에서 구한 각 축의 최대 절댓값입니다. 체결 시간은 첫·마지막 샘플 사이의 관측 구간입니다. 샘플이 없으면 N/A가 표시됩니다. GUI의 `mode:=fake`에서는 수신값에 MOCK을 붙이며, 이 표시는 GUI 모드 설정에 따릅니다. 기본 Fake Launch는 영상이나 Wrench를 발행하지 않습니다.
 
 영상 연결, 설정과 측정 방법은 [영상 파이프라인](VIDEO_PIPELINE.md)에 있습니다.
+
+## L/F 최소 통합 계약
+
+`mode:=inspection`은 외부 관측 결과를 모으는 경로입니다. CHECK → INSPECT → WAIT_WORKER → 작업자 DONE → RECHECK → VERIFY → REPORT 순서입니다. Robot Action과 자동 FETCH·STOW·FASTEN은 이 경로의 실행 대상에서 제외됩니다. 기존 `mode:=fake`는 단일 볼트 `/inspect` 및 전체 조립 공정을 사용합니다.
+
+| 제공 담당 | 서비스와 타입 | 요청 | 응답 |
+|---|---|---|---|
+| 비전 1 | `/integration/inspect_positions` · `core_interfaces/srv/InspectPositions` | `task_id`, `stage` (INSPECT 또는 RECHECK), `not_before` | `presence_l`, `presence_f` 및 공통 증거 필드 |
+| 비전 2 | `/integration/read_fastening` · `core_interfaces/srv/ReadFastening` | `task_id`, `not_before` | `fastening_l`, `fastening_f` 및 공통 증거 필드 |
+
+- 비전 1은 자체 영상 처리 함수의 결과를 L/F 두 필드에 매핑합니다. 각 위치는 `PRESENT`, `MISSING`, `UNKNOWN` 중 하나입니다. L/F는 프로젝트의 물리 위치 ID입니다.
+- 비전 2는 별도 검증된 작업 절차에서 획득한 결과를 현재 `task_id`의 읽기 전용 서비스로 제공합니다. 각 위치는 `SEATED`, `NOT_SEATED`, `UNKNOWN` 중 하나입니다. 이 서비스 콜백에서 힘·순응제어를 시작하거나 체결 동작을 실행하면 안 됩니다. 검사 수행 및 해제의 책임은 팀의 실물 검증 절차와 Robot Node에 있습니다. 기존 `Fasten`은 조임 Action으로 유지합니다.
+- 공통 증거 필드는 `success`, `error_code`, `reason`, `stamp`, `origin` (`REAL` 또는 `FAKE`), `verified`입니다. `stamp`는 두 위치 중 더 일찍 취득한 실제 관측의 ROS 시각입니다. 공급자는 요청의 `task_id`와 `not_before`를 기준으로 결과를 조회하며, 응답 시각을 관측 시각으로 대체하지 않습니다. 관측이 없으면 `success=false`와 오류 사유를 반환하거나, 개별 위치를 `UNKNOWN`으로 반환합니다.
+- 관제는 `success=true`, `error_code=0`, `stamp >= not_before`, 기본 3초 이내의 최신성, `origin=REAL`, `verified=true`를 확인합니다. `verified`는 연결 담당자가 검증한 공급자의 표식이며 관제가 물리 검사 방법을 독립 인증하지 않습니다. 유효한 `origin=FAKE`는 FAKE, 오래된·미검증·실패 응답은 UNVERIFIED로 표시하며 HOLD합니다. 잘못된 위치 값은 해당 위치만 UNKNOWN으로 처리합니다.
+- RECHECK에서 두 위치 모두 PRESENT일 때만 체결 확인을 읽습니다. 검증된 체결 증거에서 하나라도 NOT_SEATED이면 FAIL, 나머지 경우 하나라도 UNKNOWN이면 HOLD, 두 위치 모두 SEATED이면 PASS입니다. 이 PASS의 범위는 L/F 존재 및 체결 상태 확인입니다.
+- `/control_status`와 `/task_result`에 `presence_l`, `presence_f`, `fastening_l`, `fastening_f`, `presence_evidence`, `fastening_evidence`를 추가했습니다. Fake 조립 경로의 L/F 필드는 비어 있으며 기존 단일 판정과 `mode=fake`를 사용합니다. JSONL에도 같은 필드가 기록됩니다.
+
+### 오늘 통합 실행
+
+새 오버레이를 빌드하고 각 담당자 터미널에서 source합니다. 독립 Fake Launch가 떠 있으면 종료하고 같은 DDS 설정에서 외부 공급자와 아래 Launch를 실행합니다. Fake 전용 Watchdog은 inspection 모드의 상태를 자신의 Heartbeat로 사용하지 않습니다.
+
+```bash
+cd ~/cobot2_ws
+source /opt/ros/jazzy/setup.bash
+colcon --log-base log/core-v01 build --base-paths src/core_project \
+  --build-base build/core-v01 --install-base install/core-v01 --symlink-install
+source install/core-v01/local_setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_DOMAIN_ID=50
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+
+ros2 launch core_bringup system.launch.py mode:=inspection gui:=true
+```
+
+비전 담당자는 ROS 콜백 `inspect_positions(request, response)`와 `read_fastening(request, response)`를 위 이름과 타입으로 등록합니다. 공급자 탐색과 응답에 적용하는 기본 기한은 각각 서비스별 5초와 10초이며, Control 파라미터 `inspectpositions_timeout`, `readfastening_timeout`으로 조정합니다. 관측 최신성 기준은 `evidence_max_age`입니다. 분산 PC에서는 ROS 시각 기준을 맞춥니다. 입력이 준비되지 않은 경우 관제는 서비스 부재·Timeout 또는 미검증 증거로 HOLD를 기록합니다. 외부 모드는 Robot Node를 기동하지 않습니다.
+
+음성 담당자는 최신 `allowed_commands` 확인 후 아래와 동등한 ROS 요청을 보냅니다. `check`는 READY에서, `done`은 작업자가 L/F 준비를 실제로 끝낸 WAIT_WORKER에서 보냅니다.
+
+```bash
+ros2 service call /job_command core_interfaces/srv/JobCommand "{command: check, source: voice}"
+ros2 service call /job_command core_interfaces/srv/JobCommand "{command: done, source: voice}"
+ros2 service call /emergency_stop core_interfaces/srv/EmergencyStop "{command: stop, source: voice}"
+# 실제 연결 대상의 Robot STOP 서비스가 제공될 때만 독립 경로도 요청
+ros2 service call /robot/emergency_stop core_interfaces/srv/EmergencyStop "{command: stop, source: voice}"
+```
+
+음성 STOP은 로컬 정지 의도를 인식하면 `voice_commands.py`의 `request_local_stop()`처럼 두 경로를 독립 호출할 수 있습니다. `mode=inspection`의 관제 STOP 응답 `inspection_stop_latched`는 결과 수집 공정의 정지 래치입니다. 실제 장비 정지는 독립 보호 회로 및 검증된 Robot STOP 경로에서 확인합니다.
+
+DB 담당자는 `/task_result`를 Reliable / Transient Local / depth 1로 구독하고 `task_id`로 중복 업로드를 방지합니다. `mode`와 두 증거 필드를 함께 저장합니다. 빠른 확인 명령은 다음과 같습니다.
+
+```bash
+ros2 topic echo /task_result --qos-durability transient_local
+```

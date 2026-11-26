@@ -53,3 +53,10 @@ P0-a 관제 코어(Fake 9단계 CLI 완주), JSONL 및 Episode 계약 → P0-b �
 - 정지 시 STOPPED 상태를 유지하며 최초 원인과 결과를 기록한다. 물리 상태가 불확실하면 RECOVER에서 관리자 확인을 기다린다. 안전 조건과 동작 종료가 확인되면 명시적 RESUME 이후 새 작업을 받을 수 있다.
 - 관제 스냅샷과 마지막 작업 결과를 DDS로 제공한다. GUI는 기존 ROS 영상 토픽을 Preview로 표시하며, Vision Input 및 기존 RTP/JPEG Unicast를 독립적으로 운영한다.
 - 필드, 실행 정책과 변경 사유는 INTERFACES.md와 DEVELOPMENT.md에 기록한다.
+
+
+## P0-b L/F 결과 통합
+
+- `mode:=fake`는 위 단일 볼트 조립 시퀀스를 실행합니다.
+- `mode:=inspection`은 같은 패키지와 FSM의 상태를 재사용합니다. L/F별 존재 검사를 받고 작업자 준비 후 재검사합니다. 두 볼트가 확인되면 VERIFY에서 외부 체결 검사 결과를 읽습니다.
+- L/F 검사 모드에서 Robot Action, 자동 공구 인계·거치 및 마무리 조임은 실행 범위에 포함되지 않습니다. 서비스 계약, 판정 근거와 실패 처리 기준은 [INTERFACES.md](INTERFACES.md#lf-최소-통합-계약)에 있습니다.

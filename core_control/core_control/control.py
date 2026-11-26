@@ -21,9 +21,9 @@ from core_common.status_qos import SNAPSHOT_QOS, current_stamp
 from core_common.types import Outcome, State
 from core_interfaces.action import Fasten, Fetch, MoveTo, Stow
 from core_interfaces.msg import Announcement, ControlStatus, LogEvent, RobotStatus, TaskResult
-from core_interfaces.srv import EmergencyStop, Inspect, JobCommand, Locate
+from core_interfaces.srv import EmergencyStop, Inspect, InspectPositions, JobCommand, Locate, ReadFastening
 
-from .task_assembly import AssemblyTask, TaskEnded
+from .task_assembly import AssemblyTask, InspectionTask, TaskEnded, position_fields
 
 
 ACTIONS = {MoveTo: 'move_to', Fetch: 'fetch', Stow: 'stow', Fasten: 'fasten'}
@@ -35,7 +35,12 @@ class Control(Node):
     def __init__(self, **node_options):
         super().__init__('control', **node_options)
         self.mode = self.declare_parameter('mode', 'fake').value
-        require_fake(self.mode)
+        self.inspection_only = self.mode == 'inspection'
+        if not self.inspection_only:
+            require_fake(self.mode)
+        self.evidence_max_age = self.declare_parameter('evidence_max_age', 3.0).value
+        if not isfinite(self.evidence_max_age) or self.evidence_max_age <= 0:
+            raise ValueError('evidence_max_age must be positive')
         self.data = data_directory(self.declare_parameter('data_dir', 'data').value)
         self.data.mkdir(parents=True, exist_ok=True)
         self.limits = {key: self.declare_parameter(key + '_timeout', default).value
@@ -43,7 +48,7 @@ class Control(Node):
                            'goal': 5.0, 'move_to': 15.0, 'fetch': 30.0, 'stow': 30.0,
                            'fasten': 30.0, 'cancel': 2.0, 'action_settle': 3.0,
                            'feedback': 3.0, 'progress': 3.0, 'inspect': 5.0, 'locate': 5.0,
-                           'robot_heartbeat': 1.0,
+                           'robot_heartbeat': 1.0, 'inspectpositions': 5.0, 'readfastening': 10.0,
                            'stop_response': 1.0, 'resume_response': 2.0, 'worker': 120.0,
                        }.items()}
         self.stop_limit = self.declare_parameter('stop_attempts', 3).value
@@ -57,9 +62,9 @@ class Control(Node):
         self.worker_timeout = self.limits['worker']
         self.lock = RLock()
         self.shutdown = Event()
-        self.state = State.RECOVER
-        self.starting = True
-        self.recovery = 'awaiting_robot_status'
+        self.state = State.READY if self.inspection_only else State.RECOVER
+        self.starting = not self.inspection_only
+        self.recovery = '' if self.inspection_only else 'awaiting_robot_status'
         self.stop_reason = ''
         self.last_reason = ''
         self.last_result = None
@@ -75,12 +80,19 @@ class Control(Node):
         self.stop_observed_id = ''
         self.stop_reassert = False
         self.uncertain_action = False
-        self.actions = {kind: ActionClient(self, kind, '/' + name) for kind, name in ACTIONS.items()}
-        self.service_clients = {kind: self.create_client(kind, name) for kind, name in (
-            (Inspect, '/inspect'), (Locate, '/locate'), (EmergencyStop, '/robot/emergency_stop'))}
+        if self.inspection_only:
+            services = ((InspectPositions, '/integration/inspect_positions'),
+                        (ReadFastening, '/integration/read_fastening'))
+            self.actions = {}
+        else:
+            services = ((Inspect, '/inspect'), (Locate, '/locate'),
+                        (EmergencyStop, '/robot/emergency_stop'))
+            self.actions = {kind: ActionClient(self, kind, '/' + name)
+                            for kind, name in ACTIONS.items()}
+            self.create_subscription(RobotStatus, '/robot_status', self.receive_status, 10)
+        self.service_clients = {kind: self.create_client(kind, name) for kind, name in services}
         self.create_service(JobCommand, '/job_command', self.command)
         self.create_service(EmergencyStop, '/emergency_stop', self.emergency_stop)
-        self.create_subscription(RobotStatus, '/robot_status', self.receive_status, 10)
         self.status = self.create_publisher(ControlStatus, '/control_status', SNAPSHOT_QOS)
         self.logs = self.create_publisher(LogEvent, '/event_log', 100)
         self.results = self.create_publisher(TaskResult, '/task_result', SNAPSHOT_QOS)
@@ -118,7 +130,7 @@ class Control(Node):
             top=record.top if record else '', side=record.side if record else '',
             fastening=record.fastening if record else '', outcome=record.outcome if record else '',
             last_reason=self.last_reason, allowed_commands=self.allowed_commands(),
-            states=list(record.states) if record else []))
+            states=list(record.states) if record else [], **position_fields(record)))
 
     def log(self, task_id, stage, message, level='INFO', *, node='control', source=''):
         msg = LogEvent(stamp=self.stamp(), task_id=task_id, stage=stage, node=node,
@@ -167,6 +179,11 @@ class Control(Node):
                 allowed.append('cancel')
                 if self.state == State.WAIT_WORKER and not self.task.done:
                     allowed.append('done')
+        elif self.inspection_only:
+            if self.state == State.READY:
+                allowed.append('check')
+            elif self.state == State.STOPPED:
+                allowed.append('resume')
         elif self.state == State.READY and self.clearance() and self.physical_ready():
             allowed.append('check')
         elif self.state == State.RECOVER and self.clearance() and self.physical_ready():
@@ -228,9 +245,11 @@ class Control(Node):
 
     def tick(self):
         with self.lock:
-            if self.task and not self.fresh_robot():
+            if not self.inspection_only and self.task and not self.fresh_robot():
                 self.latch_stop('robot_heartbeat_lost')
-            if self.state == State.STOPPED:
+            if self.inspection_only:
+                pass
+            elif self.state == State.STOPPED:
                 self.tick_stop()
             elif self.starting and self.fresh_robot():
                 self.starting = False
@@ -242,7 +261,8 @@ class Control(Node):
                 if not self.clearance() or not self.physical_ready():
                     self.state = State.RECOVER
                     self.recovery = 'physical_state_unconfirmed'
-            if not all(self.service_clients[kind].service_is_ready() for kind in (Inspect, Locate)):
+            vision_services = (InspectPositions,) if self.inspection_only else (Inspect, Locate)
+            if not all(self.service_clients[kind].service_is_ready() for kind in vision_services):
                 self.vision_status = 'UNAVAILABLE'
             elif self.vision_status == 'UNAVAILABLE':
                 self.vision_status = 'UNVERIFIED'
@@ -305,7 +325,10 @@ class Control(Node):
                 future.cancel()
                 self.resume_pending = None
             self.resume_ack = None
-            self.start_stop_cycle(reassert=self.state == State.STOPPED)
+            if self.inspection_only:
+                self.recovery = 'inspection_stop_latched'
+            else:
+                self.start_stop_cycle(reassert=self.state == State.STOPPED)
             if self.state != State.STOPPED:
                 self.starting = False
                 self.state = State.STOPPED
@@ -323,13 +346,14 @@ class Control(Node):
                 response.reason = 'expected_stop'
                 return response
             self.latch_stop('operator_stop', request.source)
-            if self.recovery == 'stop_unconfirmed' and not self.stop_pending:
-                self.start_stop_cycle(reassert=True)
-            self.tick_stop()
+            if not self.inspection_only:
+                if self.recovery == 'stop_unconfirmed' and not self.stop_pending:
+                    self.start_stop_cycle(reassert=True)
+                self.tick_stop()
             self.log(self.task.task_id if self.task else '', self.state,
                      'stop request accepted', source=request.source)
             response.success = True
-            response.reason = 'control_stop_latched'
+            response.reason = self.recovery if self.inspection_only else 'control_stop_latched'
             return response
 
     def command(self, request, response):
@@ -347,7 +371,8 @@ class Control(Node):
             elif command in self.allowed_commands():
                 if command == 'check':
                     self.recovery = self.last_reason = ''
-                    self.task = AssemblyTask(self, uuid4().hex, source)
+                    task_type = InspectionTask if self.inspection_only else AssemblyTask
+                    self.task = task_type(self, uuid4().hex, source)
                     active_id = self.task.task_id
                     self.thread = Thread(target=self.run_task, args=(self.task,))
                     self.thread.start()
@@ -356,7 +381,7 @@ class Control(Node):
                 elif command == 'cancel':
                     self.task.cancelled = True
                 elif command == 'resume':
-                    if self.state == State.STOPPED:
+                    if self.state == State.STOPPED and not self.inspection_only:
                         self.resume_pending = self.start_robot_request('resume', self.robot_status.stop_id)
                         if self.resume_pending is None:
                             response.reason = 'resume_request_failed'
@@ -403,14 +428,18 @@ class Control(Node):
     def service(self, task, kind, request):
         client = self.service_clients[kind]
         timeout = self.limits[kind.__name__.lower()]
+        is_vision = kind is not ReadFastening
+        prefix = 'vision' if is_vision else 'fastening_evidence'
         future = None
         try:
-            self.wait_for(task, client.service_is_ready, timeout, 'vision_service_unavailable')
+            self.wait_for(task, client.service_is_ready, timeout, prefix + '_service_unavailable')
             future = client.call_async(request)
-            self.wait_for(task, future.done, timeout, 'vision_service_timeout')
+            self.wait_for(task, future.done, timeout, prefix + '_service_timeout')
             reply = future.result()
-            with self.lock:
-                self.vision_status = ('FAKE OK' if reply.success else
+            if is_vision:
+                with self.lock:
+                    success_status = 'EXTERNAL REPLY' if self.inspection_only else 'FAKE OK'
+                    self.vision_status = (success_status if reply.success else
                                       'NOT_IMPLEMENTED' if reply.error_code == Error.NOT_IMPLEMENTED
                                       else 'ERROR')
             return reply
@@ -563,14 +592,15 @@ class Control(Node):
                 outcome=outcome, reason=reason, stop_reason=self.stop_reason, top=task.top,
                 fastening=task.fastening, side=task.side, episode_id=task.episode_id,
                 tightening_valid=task.tightening_valid, peak_torque=task.peak_torque,
-                turns=task.turns, recipe_id=task.recipe_id, states=task.states)
+                turns=task.turns, recipe_id=task.recipe_id, states=task.states, **position_fields(task))
             self.journal.submit('task_results.jsonl', message_to_ordereddict(result))
             self.last_result = result
             self.results.publish(result)
             self.announce(task, result_text(outcome, reason))
             self.task = None
             if self.state != State.STOPPED:
-                if self.terminal_snapshot(task) and self.clearance() and self.physical_ready():
+                if self.inspection_only or (self.terminal_snapshot(task)
+                                            and self.clearance() and self.physical_ready()):
                     self.state = State.READY
                 else:
                     self.state = State.RECOVER
