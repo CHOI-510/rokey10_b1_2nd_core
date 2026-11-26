@@ -21,6 +21,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('mode', default_value='fake', choices=['fake', 'inspection']),
         DeclareLaunchArgument('scenario', default_value='missing', choices=list(SCENARIOS)),
+        # /fasten backend: fake (default) or real (cobot_robot routine on the M0609, needs Doosan bringup)
+        DeclareLaunchArgument('fasten_backend', default_value='fake', choices=['fake', 'real']),
         DeclareLaunchArgument('data_dir', default_value='data'),
         DeclareLaunchArgument('voice', default_value='false'),
         DeclareLaunchArgument('llm', default_value='false'),
@@ -32,7 +34,8 @@ def generate_launch_description():
         DeclareLaunchArgument('side_image_topic', default_value=''),
         DeclareLaunchArgument('wrench_topic', default_value=''),
         Node(package='core_robot', executable='robot_node', name='robot_node', output='screen',
-             condition=fake, parameters=[str(config / 'robot.yaml'), base, {'scenario': scenario}]),
+             condition=fake, parameters=[str(config / 'robot.yaml'), base, {
+                 'scenario': scenario, 'fasten_backend': LaunchConfiguration('fasten_backend')}]),
         Node(package='core_vision', executable='vision_node', name='vision_node', output='screen',
              condition=fake, parameters=[{'mode': mode, 'scenario': scenario}]),
         Node(package='core_control', executable='control', name='control', output='screen',

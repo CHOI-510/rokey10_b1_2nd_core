@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>cobot_robot</name>
+  <version>0.0.1</version>
+  <description>Cobot2 core test: M0609 screw fastening with a gripped screwdriver (force/compliance control, no vision).</description>
+  <maintainer email="rokey@todo.todo">rokey</maintainer>
+  <license>TODO</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>dsr_common2</exec_depend>
+  <exec_depend>robot_control</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-gi</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
