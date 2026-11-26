@@ -1,0 +1,6 @@
+string task_id
+string item_id
+---
+bool success
+int32 error_code
+core_interfaces/TargetPose pose

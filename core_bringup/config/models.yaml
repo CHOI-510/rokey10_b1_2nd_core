@@ -1,0 +1,15 @@
+# Backends and paths will be selected by the responsible team.
+vision:
+  backend: null
+  path: null
+wakeword:
+  backend: null
+  path: null
+stt:
+  backend: null
+  path: null
+llm:
+  backend: null
+tts:
+  backend: null
+  path: null

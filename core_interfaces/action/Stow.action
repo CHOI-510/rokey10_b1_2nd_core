@@ -1,0 +1,11 @@
+string task_id
+string item_id
+core_interfaces/TargetPose grasp_pose
+string holder_id
+---
+bool success
+int32 error_code
+---
+string stage
+string log_level
+string log_msg

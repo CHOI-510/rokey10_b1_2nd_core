@@ -1,0 +1,12 @@
+# P0-b calibration template. Fake actions use synthetic inputs.
+gripper:
+  model: OnRobot RG2
+  transport: modbus_tcp
+  host: null
+  port: 502
+driver:
+  tcp: null
+  tool: null
+  recipes:
+    finish: null
+    confirm: null

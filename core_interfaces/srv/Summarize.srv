@@ -1,0 +1,5 @@
+core_interfaces/TaskResult result
+---
+bool success
+int32 error_code
+string text

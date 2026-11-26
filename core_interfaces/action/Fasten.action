@@ -1,0 +1,15 @@
+string task_id
+string point_id
+core_interfaces/TargetPose bolt_pose
+string recipe_id
+---
+bool success
+int32 error_code
+string state
+float64 peak_torque
+float64 turns
+string episode_id
+---
+string stage
+string log_level
+string log_msg

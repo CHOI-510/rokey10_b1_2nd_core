@@ -1,0 +1,5 @@
+string command
+---
+bool success
+int32 error_code
+string reason

@@ -1,0 +1,9 @@
+string task_id
+string stage
+string view_id
+---
+bool success
+int32 error_code
+string presence
+string side
+core_interfaces/TargetPose bolt_pose

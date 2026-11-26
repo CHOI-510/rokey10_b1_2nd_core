@@ -1,0 +1,6 @@
+string command
+---
+bool accepted
+string state
+string task_id
+string reason

@@ -1,0 +1,7 @@
+# P0-b calibration template.
+camera:
+  model: RealSense D435i
+  mount: wrist
+  serial: null
+  optical_frame: null
+  calibration: null
